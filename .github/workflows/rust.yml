@@ -2,28 +2,27 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build debug
-      if: github.event_name == 'pull_request'
-      run: cargo build
-    - name: Build release
-      if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-      run: cargo build --release
-    - name: Run tests
-      run: cargo test
+      - uses: actions/checkout@v7
+      - name: Build debug
+        if: github.event_name == 'pull_request'
+        run: cargo build
+      - name: Build release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: cargo build --release
+      - name: Run tests
+        run: cargo test
 
   codeql:
     name: CodeQL
@@ -35,12 +34,12 @@ jobs:
       security-events: write
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Initialize CodeQL
-      uses: github/codeql-action/init@v3
-      with:
-        languages: rust
-    - name: Autobuild
-      uses: github/codeql-action/autobuild@v3
-    - name: Analyze
-      uses: github/codeql-action/analyze@v3
+      - uses: actions/checkout@v7
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v4
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
