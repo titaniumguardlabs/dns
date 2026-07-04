@@ -57,7 +57,9 @@ mod tests {
         let ready = request(addr, "/ready").await;
         assert!(ready.starts_with("HTTP/1.1 200 OK\r\n"));
         let metrics = request(addr, "/metrics").await;
-        assert!(metrics.contains("# HELP dns_active_queries DNS queries currently being handled.\n"));
+        assert!(
+            metrics.contains("# HELP dns_active_queries DNS queries currently being handled.\n")
+        );
         assert!(metrics.contains("# TYPE dns_policy_denials_total counter\n"));
         assert!(metrics.contains("dns_active_queries 1\n"));
         assert!(metrics.contains("dns_policy_denials_total 1\n"));
