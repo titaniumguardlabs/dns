@@ -1,5 +1,7 @@
 use super::*;
-use crate::logging::{LogMode, TenantLoggingRule};
+use crate::logging::LogMode;
+#[cfg(feature = "audit-logging")]
+use crate::logging::TenantLoggingRule;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -32,6 +34,7 @@ fn sample_config() -> AppConfig {
     }
 }
 
+#[cfg(any(feature = "dot", feature = "doh"))]
 fn temp_file_with_contents(prefix: &str, contents: &[u8]) -> PathBuf {
     let path = unique_missing_path(prefix);
     fs::write(&path, contents).expect("temp file write should succeed");
@@ -407,6 +410,7 @@ fn app_config_rejects_unknown_top_level_field() {
 }
 
 #[test]
+#[cfg(feature = "audit-logging")]
 fn validate_rejects_insecure_logging_secret_in_strict_mode() {
     let mut config = AppConfig::default();
     config.logging.enabled = true;
@@ -417,6 +421,7 @@ fn validate_rejects_insecure_logging_secret_in_strict_mode() {
 }
 
 #[test]
+#[cfg(feature = "audit-logging")]
 fn validate_rejects_logging_tenant_id_path_traversal() {
     let mut config = AppConfig::default();
     config.logging.enabled = true;
@@ -432,6 +437,17 @@ fn validate_rejects_logging_tenant_id_path_traversal() {
 }
 
 #[test]
+#[cfg(not(feature = "audit-logging"))]
+fn validate_rejects_logging_when_audit_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.logging.enabled = true;
+    config.logging.hmac_secret = "test-secret".to_string();
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("audit-logging"));
+}
+
+#[test]
 fn validate_rejects_non_loopback_health_listener() {
     let mut config = AppConfig::default();
     config.health.listen_addr = "0.0.0.0:8081".parse().expect("addr");
@@ -441,6 +457,7 @@ fn validate_rejects_non_loopback_health_listener() {
 }
 
 #[test]
+#[cfg(feature = "recursion")]
 fn validate_rejects_enabled_recursion_without_cidrs() {
     let mut config = AppConfig::default();
     config.recursion.enabled = true;
@@ -450,6 +467,7 @@ fn validate_rejects_enabled_recursion_without_cidrs() {
 }
 
 #[test]
+#[cfg(feature = "recursion")]
 fn validate_rejects_invalid_recursion_cidr() {
     let mut config = AppConfig::default();
     config.recursion.allowed_client_cidrs = vec!["127.0.0.1/99".to_string()];
@@ -459,6 +477,18 @@ fn validate_rejects_invalid_recursion_cidr() {
 }
 
 #[test]
+#[cfg(not(feature = "recursion"))]
+fn validate_rejects_recursion_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.recursion.enabled = true;
+    config.recursion.allowed_client_cidrs = vec!["127.0.0.0/8".to_string()];
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("recursion"));
+}
+
+#[test]
+#[cfg(feature = "dot")]
 fn validate_rejects_missing_tls_files() {
     let mut config = AppConfig::default();
     config.transports.dot = Some(TlsTransportConfig {
@@ -472,6 +502,87 @@ fn validate_rejects_missing_tls_files() {
 }
 
 #[test]
+#[cfg(not(feature = "dot"))]
+fn validate_rejects_dot_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.transports.dot = Some(TlsTransportConfig {
+        listen_addr: "0.0.0.0:853".parse().expect("addr"),
+        cert_path: "/tmp/definitely-missing-cert.pem".to_string(),
+        key_path: "/tmp/definitely-missing-key.pem".to_string(),
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("dot"));
+}
+
+#[test]
+#[cfg(not(feature = "redis-cache"))]
+fn validate_rejects_redis_cache_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.caching = CachingConfig::Redis {
+        url: "redis://127.0.0.1/".to_string(),
+        key_prefix: "dns:records:".to_string(),
+        required: false,
+        timeout_ms: 250,
+        failure_threshold: 3,
+    };
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("redis-cache"));
+}
+
+#[test]
+#[cfg(not(feature = "doh"))]
+fn validate_rejects_doh_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.transports.doh = Some(HttpsTransportConfig {
+        listen_addr: "0.0.0.0:8443".parse().expect("addr"),
+        cert_path: "/tmp/definitely-missing-cert.pem".to_string(),
+        key_path: "/tmp/definitely-missing-key.pem".to_string(),
+        dns_hostname: None,
+        endpoint: "/dns-query".to_string(),
+        max_doh_h2_connections: DEFAULT_MAX_DOH_H2_CONNECTIONS,
+        max_doh_h2_streams_per_connection: DEFAULT_MAX_DOH_H2_STREAMS_PER_CONNECTION,
+        max_doh_body_bytes: DEFAULT_MAX_DOH_BODY_BYTES,
+        odoh: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("doh"));
+}
+
+#[test]
+#[cfg(not(feature = "doq"))]
+fn validate_rejects_doq_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.transports.doq = Some(QuicTransportConfig {
+        listen_addr: "0.0.0.0:8853".parse().expect("addr"),
+        cert_path: "/tmp/definitely-missing-cert.pem".to_string(),
+        key_path: "/tmp/definitely-missing-key.pem".to_string(),
+        dns_hostname: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("doq"));
+}
+
+#[test]
+#[cfg(not(feature = "doh3"))]
+fn validate_rejects_doh3_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.transports.doh3 = Some(QuicTransportConfig {
+        listen_addr: "0.0.0.0:9443".parse().expect("addr"),
+        cert_path: "/tmp/definitely-missing-cert.pem".to_string(),
+        key_path: "/tmp/definitely-missing-key.pem".to_string(),
+        dns_hostname: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("doh3"));
+}
+
+#[test]
+#[cfg(feature = "doh")]
 fn validate_accepts_valid_odoh_public_key_for_kem() {
     let cert = temp_file_with_contents("dns-cert", b"cert");
     let key = temp_file_with_contents("dns-key", b"key");
@@ -501,6 +612,7 @@ fn validate_accepts_valid_odoh_public_key_for_kem() {
 }
 
 #[test]
+#[cfg(feature = "doh")]
 fn validate_rejects_mismatched_odoh_public_key_length() {
     let cert = temp_file_with_contents("dns-cert-mismatch", b"cert");
     let key = temp_file_with_contents("dns-key-mismatch", b"key");

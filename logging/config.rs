@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "audit-logging"), allow(dead_code))]
+
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -66,7 +68,7 @@ impl Default for LoggingConfig {
 }
 
 fn default_logging_enabled() -> bool {
-    true
+    cfg!(feature = "audit-logging")
 }
 
 fn default_log_mode() -> LogMode {

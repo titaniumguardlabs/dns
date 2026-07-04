@@ -1,8 +1,10 @@
 use hickory_server::proto::rr::RecordType;
+#[cfg(feature = "audit-logging")]
 use serde::Serialize;
 use std::net::IpAddr;
 use std::time::SystemTime;
 
+#[cfg_attr(not(feature = "audit-logging"), allow(dead_code))]
 #[derive(Clone)]
 pub struct RawLogEvent {
     pub started_at: SystemTime,
@@ -14,6 +16,7 @@ pub struct RawLogEvent {
     pub device_hint: Option<Vec<u8>>,
 }
 
+#[cfg(feature = "audit-logging")]
 #[derive(Serialize)]
 pub struct SanitizedLogEvent {
     pub ts_ms: u128,
@@ -29,6 +32,7 @@ pub struct SanitizedLogEvent {
     pub hash_window: u64,
 }
 
+#[cfg(feature = "audit-logging")]
 #[derive(Clone)]
 pub struct PolicyBinding {
     pub tenant_id: String,

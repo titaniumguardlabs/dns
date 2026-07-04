@@ -5,11 +5,14 @@ use crate::config::{RecursionConfig, ZoneConfig};
 use crate::logging::{LoggingPipeline, RawLogEvent, extract_device_hint};
 use crate::policy::PolicyRuntime;
 use crate::policy::schema::ActionType;
+#[cfg(feature = "recursion")]
 use hickory_recursor::{DnssecPolicy, NameServerConfigGroup, Recursor};
+#[cfg(feature = "recursion")]
+use hickory_server::proto::{op::Query, rr::RecordType};
 use hickory_server::{
     authority::MessageResponseBuilder,
-    proto::op::{Edns, Header, Query, ResponseCode},
-    proto::rr::{Record, RecordType},
+    proto::op::{Edns, Header, ResponseCode},
+    proto::rr::Record,
     server::{Request, ResponseHandler, ResponseInfo},
 };
 use std::{
@@ -23,6 +26,7 @@ use tracing::error;
 impl Forwarder {
     const MAX_RESPONSE_UDP_PAYLOAD: u16 = 1232;
 
+    #[cfg(feature = "recursion")]
     fn root_hints(root_servers: &[IpAddr]) -> NameServerConfigGroup {
         NameServerConfigGroup::from_ips_clear(root_servers, 53, true)
     }
@@ -31,7 +35,9 @@ impl Forwarder {
     pub fn with_cache(
         root_servers: &[IpAddr],
         zone_configs: &[ZoneConfig],
-        cache: Arc<dyn DnsRecordCache>,
+        #[cfg_attr(not(feature = "recursion"), allow(unused_variables))] cache: Arc<
+            dyn DnsRecordCache,
+        >,
         logging: Arc<LoggingPipeline>,
         policy: Arc<PolicyRuntime>,
         runtime: RuntimeState,
@@ -48,31 +54,42 @@ impl Forwarder {
     }
 
     pub fn with_cache_and_recursion(
-        root_servers: &[IpAddr],
+        #[cfg_attr(not(feature = "recursion"), allow(unused_variables))] root_servers: &[IpAddr],
         zone_configs: &[ZoneConfig],
         cache: Arc<dyn DnsRecordCache>,
         logging: Arc<LoggingPipeline>,
         policy: Arc<PolicyRuntime>,
         runtime: RuntimeState,
+        #[cfg_attr(not(feature = "recursion"), allow(unused_variables))]
         recursion_config: &RecursionConfig,
     ) -> DynResult<Self> {
-        if root_servers.is_empty() {
-            return Err("at least one root server address must be configured".into());
-        }
+        #[cfg(not(feature = "recursion"))]
+        let _ = &cache;
 
-        let recursor = Recursor::builder()
-            .dnssec_policy(DnssecPolicy::ValidateWithStaticKey { trust_anchor: None })
-            .build(Self::root_hints(root_servers))?;
+        #[cfg(feature = "recursion")]
+        let recursor = {
+            if root_servers.is_empty() {
+                return Err("at least one root server address must be configured".into());
+            }
+
+            Recursor::builder()
+                .dnssec_policy(DnssecPolicy::ValidateWithStaticKey { trust_anchor: None })
+                .build(Self::root_hints(root_servers))?
+        };
         let authoritative_zones = AuthoritativeZones::from_configs(zone_configs)?;
+        #[cfg(feature = "recursion")]
         let recursion = super::RecursionAuthorizer::from_config(recursion_config)
             .map_err(|err| format!("invalid recursion config: {err}"))?;
         Ok(Self {
+            #[cfg(feature = "recursion")]
             recursor: Arc::new(recursor),
             authoritative_zones: Arc::new(authoritative_zones),
+            #[cfg(feature = "recursion")]
             cache,
             logging,
             policy,
             runtime,
+            #[cfg(feature = "recursion")]
             recursion,
         })
     }
@@ -83,6 +100,7 @@ impl Forwarder {
         header.into()
     }
 
+    #[cfg(feature = "recursion")]
     fn response_has_authentic_data(records: &[Record]) -> bool {
         let mut has_secure_records = false;
 
@@ -123,6 +141,7 @@ impl Forwarder {
         response_edns
     }
 
+    #[cfg(feature = "recursion")]
     pub(super) fn cache_key(request: &Request, query_has_dnssec_ok: bool) -> DynResult<String> {
         let info = request.request_info()?;
         let query = info.query.original();
@@ -134,6 +153,7 @@ impl Forwarder {
         ))
     }
 
+    #[cfg(feature = "recursion")]
     pub(super) fn minimized_zone_chain(
         query_name: &hickory_server::proto::rr::Name,
     ) -> Vec<hickory_server::proto::rr::Name> {
@@ -145,6 +165,7 @@ impl Forwarder {
         (1..total_labels).map(|n| query_name.trim_to(n)).collect()
     }
 
+    #[cfg(feature = "recursion")]
     async fn prime_qname_minimization(&self, query: &Query, query_has_dnssec_ok: bool) {
         for zone_name in Self::minimized_zone_chain(query.name()) {
             let ns_query = Query::query(zone_name.clone(), RecordType::NS);
@@ -160,6 +181,7 @@ impl Forwarder {
         }
     }
 
+    #[cfg(feature = "recursion")]
     async fn send_records_response<R: ResponseHandler>(
         &self,
         request: &Request,
@@ -258,6 +280,7 @@ impl Forwarder {
         let qtype = query.query_type();
         let client_ip = request.src().ip();
         let device_hint = extract_device_hint(request.edns());
+        #[cfg_attr(not(feature = "recursion"), allow(unused_variables))]
         let query_has_dnssec_ok = request
             .edns()
             .map(|edns| edns.flags().dnssec_ok)
@@ -282,17 +305,6 @@ impl Forwarder {
             return response;
         }
 
-        let cache_key = match Self::cache_key(request, query_has_dnssec_ok) {
-            Ok(key) => key,
-            Err(err) => {
-                let response = self
-                    .send_error_response(request, response_handle, ResponseCode::FormErr)
-                    .await;
-                let _ = err;
-                return response;
-            }
-        };
-
         if let Some(lookup) = self.authoritative_zones.resolve(&query) {
             let response = self
                 .send_authoritative_response(request, response_handle, lookup)
@@ -310,6 +322,38 @@ impl Forwarder {
             return response;
         }
 
+        #[cfg(not(feature = "recursion"))]
+        {
+            let response = self
+                .send_error_response(request, response_handle, ResponseCode::Refused)
+                .await;
+            self.runtime.inc_recursion_denies();
+            self.logging.log_request(RawLogEvent {
+                started_at,
+                latency_ms: started.elapsed().as_millis(),
+                client_ip,
+                qname,
+                qtype,
+                response_code: format!("{:?}", response.response_code()),
+                device_hint,
+            });
+            self.update_audit_health();
+            return response;
+        }
+
+        #[cfg(feature = "recursion")]
+        let cache_key = match Self::cache_key(request, query_has_dnssec_ok) {
+            Ok(key) => key,
+            Err(err) => {
+                let response = self
+                    .send_error_response(request, response_handle, ResponseCode::FormErr)
+                    .await;
+                let _ = err;
+                return response;
+            }
+        };
+
+        #[cfg(feature = "recursion")]
         if !self.recursion.allows(client_ip) {
             self.runtime.inc_recursion_denies();
             let response = self
@@ -328,6 +372,7 @@ impl Forwarder {
             return response;
         }
 
+        #[cfg(feature = "recursion")]
         if let Some(records) = self.cache.get(&cache_key).await {
             self.runtime.update_cache_health(
                 self.cache.is_required(),
@@ -350,16 +395,20 @@ impl Forwarder {
             self.update_audit_health();
             return response;
         }
+        #[cfg(feature = "recursion")]
         self.runtime.inc_cache_misses();
+        #[cfg(feature = "recursion")]
         self.runtime.update_cache_health(
             self.cache.is_required(),
             self.cache.is_healthy(),
             self.cache.error_count(),
         );
 
+        #[cfg(feature = "recursion")]
         self.prime_qname_minimization(&query, query_has_dnssec_ok)
             .await;
 
+        #[cfg(feature = "recursion")]
         let lookup = match self
             .recursor
             .resolve(query, Instant::now(), query_has_dnssec_ok)
@@ -401,17 +450,22 @@ impl Forwarder {
             }
         };
 
+        #[cfg(feature = "recursion")]
         let records: Vec<Record> = lookup.records().iter().cloned().collect();
+        #[cfg(feature = "recursion")]
         self.cache.insert(cache_key, records.clone()).await;
+        #[cfg(feature = "recursion")]
         self.runtime.update_cache_health(
             self.cache.is_required(),
             self.cache.is_healthy(),
             self.cache.error_count(),
         );
 
+        #[cfg(feature = "recursion")]
         let response = self
             .send_records_response(request, response_handle, &records)
             .await;
+        #[cfg(feature = "recursion")]
         self.logging.log_request(RawLogEvent {
             started_at,
             latency_ms: started.elapsed().as_millis(),
@@ -421,7 +475,9 @@ impl Forwarder {
             response_code: format!("{:?}", response.response_code()),
             device_hint,
         });
+        #[cfg(feature = "recursion")]
         self.update_audit_health();
+        #[cfg(feature = "recursion")]
         response
     }
 

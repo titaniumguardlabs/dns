@@ -8,12 +8,12 @@ mod ops;
 mod policy;
 mod secure;
 
-use livereload::watch_file;
 use caching::DnsRecordCache;
 use caching::build_dns_record_cache;
 use config::{AppConfig, DEFAULT_CONFIG_PATH};
 use forwarder::{Forwarder, RuntimeState};
 use hickory_server::ServerFuture;
+use livereload::watch_file;
 use logging::LoggingPipeline;
 use policy::PolicyRuntime;
 use secure::register_secure_transports;
