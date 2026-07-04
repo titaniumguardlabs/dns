@@ -49,7 +49,7 @@ chrono = { version = "0.4.44", default-features = false, features = ["clock", "s
 h2 = { version = "0.4.14", default-features = false, features = ["stream"], optional = true }
 hex = { version = "0.4.3", optional = true }
 hickory-recursor = { version = "0.25.2", default-features = false, optional = true }
-hickory-server = { version = "0.25.2", default-features = false }
+hickory-server = { version = "0.26.1", default-features = false }
 http = { version = "1.4.1", default-features = false, optional = true }
 libc = { version = "0.2.186", optional = true }
 moka = { version = "0.12.15", default-features = false, features = ["future"] }
