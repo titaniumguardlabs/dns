@@ -1,0 +1,102 @@
+{
+  "version": "1.0.0",
+  "metadata": {
+    "name": "dns-rule-engine-policy-spec",
+    "revision": "2026-03-05",
+    "author": "dns"
+  },
+  "defaults": {
+    "action": "ALLOW",
+    "log_level": "info",
+    "fail_closed": false
+  },
+  "evaluation": {
+    "mode": "ORDERED",
+    "first_match_wins": true,
+    "tie_breakers": ["priority_desc", "specificity_desc", "updated_at_desc", "rule_id_asc"],
+    "merge_rule_sets": []
+  },
+  "dimensions": {
+    "client.ip": {
+      "type": "ip",
+      "source_stage": "CONNECTION",
+      "description": "Client source IP address"
+    },
+    "dns.qname": {
+      "type": "string",
+      "source_stage": "REQUEST",
+      "description": "Query name (lowercased FQDN)"
+    },
+    "dns.qtype": {
+      "type": "string",
+      "source_stage": "REQUEST",
+      "description": "Query type enum string (A, AAAA, TXT, etc.)"
+    },
+    "dns.qclass": {
+      "type": "string",
+      "source_stage": "REQUEST",
+      "description": "Query class enum string (usually IN)"
+    },
+    "dns.dnssec_ok": {
+      "type": "bool",
+      "source_stage": "REQUEST",
+      "description": "EDNS DNSSEC OK flag"
+    },
+    "dns.recursion_desired": {
+      "type": "bool",
+      "source_stage": "REQUEST",
+      "description": "RD bit from query header"
+    },
+    "conn.protocol": {
+      "type": "string",
+      "source_stage": "CONNECTION",
+      "description": "Inbound protocol marker"
+    },
+    "time.local.hour": {
+      "type": "int",
+      "source_stage": "TIME",
+      "description": "Local hour in 24h format"
+    },
+    "time.local.dow": {
+      "type": "string",
+      "source_stage": "TIME",
+      "description": "Local day of week"
+    }
+  },
+  "operators": {
+    "EXISTS": { "applicable_types": ["string", "int", "bool", "string_list", "ip", "cidr_list", "map", "string_or_null", "int_or_null"], "value_schema": {"type": "null"}, "semantics": "field exists" },
+    "NOT_EXISTS": { "applicable_types": ["string", "int", "bool", "string_list", "ip", "cidr_list", "map", "string_or_null", "int_or_null"], "value_schema": {"type": "null"}, "semantics": "field does not exist" },
+    "EQ": { "applicable_types": ["string", "int", "bool", "ip", "string_or_null", "int_or_null"], "value_schema": {}, "semantics": "exact equality" },
+    "NEQ": { "applicable_types": ["string", "int", "bool", "ip", "string_or_null", "int_or_null"], "value_schema": {}, "semantics": "exact inequality" },
+    "IN": { "applicable_types": ["string", "int", "bool", "ip"], "value_schema": {"type": "array"}, "semantics": "actual value is any of expected values" },
+    "NOT_IN": { "applicable_types": ["string", "int", "bool", "ip"], "value_schema": {"type": "array"}, "semantics": "actual value is none of expected values" },
+    "IN_SET": { "applicable_types": ["string_list"], "value_schema": {"type": "array"}, "semantics": "intersection between actual and expected arrays" },
+    "CONTAINS": { "applicable_types": ["string"], "value_schema": {"type": "string"}, "semantics": "substring match" },
+    "STARTS_WITH": { "applicable_types": ["string"], "value_schema": {"type": "string"}, "semantics": "prefix string match" },
+    "ENDS_WITH": { "applicable_types": ["string"], "value_schema": {"type": "string"}, "semantics": "suffix string match" },
+    "MATCHES_REGEX": { "applicable_types": ["string"], "value_schema": {"type": "string"}, "semantics": "regex match" },
+    "LT": { "applicable_types": ["int", "int_or_null"], "value_schema": {"type": "number"}, "semantics": "numeric less-than" },
+    "LTE": { "applicable_types": ["int", "int_or_null"], "value_schema": {"type": "number"}, "semantics": "numeric less-or-equal" },
+    "GT": { "applicable_types": ["int", "int_or_null"], "value_schema": {"type": "number"}, "semantics": "numeric greater-than" },
+    "GTE": { "applicable_types": ["int", "int_or_null"], "value_schema": {"type": "number"}, "semantics": "numeric greater-or-equal" },
+    "BETWEEN": { "applicable_types": ["int", "int_or_null"], "value_schema": {"type": "array", "minItems": 2, "maxItems": 2}, "semantics": "inclusive numeric range" },
+    "IN_CIDR": { "applicable_types": ["ip"], "value_schema": {"type": "array"}, "semantics": "IP in CIDR list" },
+    "NOT_IN_CIDR": { "applicable_types": ["ip"], "value_schema": {"type": "array"}, "semantics": "IP not in CIDR list" }
+  },
+  "schemas": {},
+  "evaluation_semantics": {
+    "default_behavior": "When no rule matches, defaults.action is returned.",
+    "deny_behavior": "Deny decisions in DNS return REFUSED from the DNS server."
+  },
+  "specificity": {},
+  "examples": {
+    "policy_file_path": "/etc/titaniumguard/dns-policy.json"
+  },
+  "explain_trace": {
+    "enabled_by": "rule_engine.enable_explain_logs"
+  },
+  "implementation_notes": {
+    "candidate_shortlist": "qname, qtype, and client.ip indices reduce rule scans before evaluation"
+  },
+  "rule_sets": []
+}
