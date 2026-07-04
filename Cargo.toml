@@ -3,6 +3,11 @@ name = "titaniumguard-dns"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
+description = "Operations-focused DNS server with policy, recursion, caching, audit logging, and MCP support."
+repository = "https://github.com/titaniumguardlabs/dns"
+readme = "README.md"
+keywords = ["dns", "resolver", "mcp"]
+categories = ["network-programming"]
 
 [[bin]]
 name = "titaniumguard-dns"
