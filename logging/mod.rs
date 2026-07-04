@@ -1,7 +1,6 @@
 #[cfg(feature = "audit-logging")]
 mod cidr;
 mod config;
-mod edns;
 #[cfg(feature = "audit-logging")]
 mod hasher;
 #[cfg(feature = "audit-logging")]
@@ -15,7 +14,6 @@ pub use config::LogMode;
 pub use config::LoggingConfig;
 #[cfg(all(test, feature = "audit-logging"))]
 pub use config::TenantLoggingRule;
-pub use edns::extract_device_hint;
 #[cfg(feature = "audit-logging")]
 pub use pipeline::LoggingPipeline;
 pub use types::RawLogEvent;

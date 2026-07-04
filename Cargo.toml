@@ -17,7 +17,7 @@ opt-level = 3
 
 [features]
 default = ["recursion", "redis-cache", "audit-logging", "dot", "doh", "doq", "doh3", "mcp"]
-dot = ["dep:rustls", "hickory-server/tls-ring"]
+dot = ["dep:rustls", "dep:tokio-rustls"]
 doh = [
     "dep:base64",
     "dep:bytes",
@@ -25,11 +25,10 @@ doh = [
     "dep:http",
     "dep:rustls",
     "dep:tokio-rustls",
-    "hickory-server/https-ring",
 ]
-doq = ["dep:rustls", "hickory-server/quic-ring"]
-doh3 = ["dep:rustls", "hickory-server/h3-ring"]
-recursion = ["dep:hickory-recursor", "hickory-recursor/dnssec-ring"]
+doq = ["dep:quinn", "dep:rustls"]
+doh3 = ["dep:base64", "dep:bytes", "dep:h3", "dep:h3-quinn", "dep:http", "dep:quinn", "dep:rustls"]
+recursion = []
 redis-cache = ["dep:redis"]
 audit-logging = ["dep:hex", "dep:hmac", "dep:libc", "dep:sha2"]
 mcp = ["dep:axum", "dep:rmcp", "dep:tokio-util"]
@@ -42,18 +41,19 @@ bytes = { version = "1.11.1", optional = true }
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
 h2 = { version = "0.4.14", default-features = false, features = ["stream"], optional = true }
 hex = { version = "0.4.3", optional = true }
-hickory-recursor = { version = "0.25.2", default-features = false, optional = true }
-hickory-server = { version = "0.25.2", default-features = false }
 hmac = { version = "0.13.0", default-features = false, optional = true }
 http = { version = "1.4.1", default-features = false, optional = true }
+h3 = { version = "0.0.8", default-features = false, optional = true }
+h3-quinn = { version = "0.0.10", default-features = false, optional = true }
 libc = { version = "0.2.186", optional = true }
 moka = { version = "0.12.15", default-features = false, features = ["future"] }
 prometheus = { version = "0.14.0", default-features = false }
+quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"], optional = true }
 redis = { version = "1.2.2", default-features = false, features = ["tokio-comp"], optional = true }
 regex = { version = "1.12.3", default-features = false, features = ["std"] }
 rmcp = { version = "2.1.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"], optional = true }
 rustls = { version = "0.23.40", default-features = false, features = ["std", "tls12", "logging", "ring"], optional = true }
-serde = { version = "1.0.228", default-features = false, features = ["derive"] }
+serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0.150", default-features = false, features = ["std"] }
 sha2 = { version = "0.11.0", default-features = false, optional = true }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "signal", "time", "fs"] }

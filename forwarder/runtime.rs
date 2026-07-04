@@ -148,7 +148,12 @@ impl RuntimeState {
         let registry = Registry::new_custom(Some("dns".to_string()), None)
             .expect("valid prometheus registry prefix");
 
-        register_gauge(&registry, "ready", "DNS server has completed startup.", snapshot.ready);
+        register_gauge(
+            &registry,
+            "ready",
+            "DNS server has completed startup.",
+            snapshot.ready,
+        );
         register_gauge(
             &registry,
             "draining",

@@ -1,10 +1,6 @@
 use super::DynResult;
 use crate::config::ZoneConfig;
-use hickory_server::proto::op::{Query, ResponseCode};
-use hickory_server::proto::rr::{
-    Name, RData, Record, RecordType,
-    rdata::{A, AAAA, NS, SOA, SRV, TXT},
-};
+use crate::dns::{DnsClass, DnsName, DnsQuestion, DnsRecord, RData, RecordType, ResponseCode};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
@@ -14,15 +10,15 @@ pub(super) struct AuthoritativeZones {
 
 pub(super) struct AuthoritativeZone {
     pub(super) apex_ascii: String,
-    soa_record: Record,
-    rrsets: HashMap<(Name, RecordType), Vec<Record>>,
-    names: HashSet<Name>,
+    soa_record: DnsRecord,
+    rrsets: HashMap<(DnsName, RecordType), Vec<DnsRecord>>,
+    names: HashSet<DnsName>,
 }
 
 pub(super) struct AuthoritativeLookup {
     pub(super) response_code: ResponseCode,
-    pub(super) answers: Vec<Record>,
-    pub(super) authorities: Vec<Record>,
+    pub(super) answers: Vec<DnsRecord>,
+    pub(super) authorities: Vec<DnsRecord>,
 }
 
 impl AuthoritativeZones {
@@ -34,10 +30,10 @@ impl AuthoritativeZones {
         Ok(Self { zones })
     }
 
-    pub(super) fn resolve(&self, query: &Query) -> Option<AuthoritativeLookup> {
-        let zone = self.find_zone(query.name())?;
-        let qname = query.name();
-        let qtype = query.query_type();
+    pub(super) fn resolve_question(&self, query: &DnsQuestion) -> Option<AuthoritativeLookup> {
+        let zone = self.find_zone(&query.name)?;
+        let qname = &query.name;
+        let qtype = query.record_type;
 
         if qtype == RecordType::ANY {
             let answers = zone.records_for_name(qname);
@@ -71,14 +67,14 @@ impl AuthoritativeZones {
         }
     }
 
-    pub(super) fn find_zone<'a>(&'a self, name: &Name) -> Option<&'a AuthoritativeZone> {
+    pub(super) fn find_zone<'a>(&'a self, name: &DnsName) -> Option<&'a AuthoritativeZone> {
         self.zones
             .iter()
             .filter(|zone| Self::name_in_zone(name, zone))
             .max_by_key(|zone| zone.apex_ascii.len())
     }
 
-    fn name_in_zone(name: &Name, zone: &AuthoritativeZone) -> bool {
+    fn name_in_zone(name: &DnsName, zone: &AuthoritativeZone) -> bool {
         let qname = name.to_ascii().to_lowercase();
         if qname == zone.apex_ascii {
             return true;
@@ -91,22 +87,24 @@ impl AuthoritativeZones {
 
 impl AuthoritativeZone {
     fn from_config(config: &ZoneConfig) -> DynResult<Self> {
-        let apex = Name::from_ascii(&config.name)?;
+        let apex = DnsName::parse_ascii(&config.name)?;
         let apex_ascii = apex.to_ascii().to_lowercase();
-        let mname = Name::from_ascii(&config.soa.mname)?;
-        let rname = Name::from_ascii(&config.soa.rname)?;
-        let soa_data = SOA::new(
-            mname,
-            rname,
-            config.soa.serial,
-            config.soa.refresh as i32,
-            config.soa.retry as i32,
-            config.soa.expire as i32,
-            config.soa.minimum,
-        );
-        let soa_record = Record::from_rdata(apex.clone(), config.soa.ttl, RData::SOA(soa_data));
-        let mut rrsets: HashMap<(Name, RecordType), Vec<Record>> = HashMap::new();
-        let mut names: HashSet<Name> = HashSet::new();
+        let soa_record = DnsRecord {
+            name: apex.clone(),
+            ttl: config.soa.ttl,
+            class: DnsClass::IN,
+            data: RData::SOA {
+                mname: DnsName::parse_ascii(&config.soa.mname)?,
+                rname: DnsName::parse_ascii(&config.soa.rname)?,
+                serial: config.soa.serial,
+                refresh: config.soa.refresh,
+                retry: config.soa.retry,
+                expire: config.soa.expire,
+                minimum: config.soa.minimum,
+            },
+        };
+        let mut rrsets: HashMap<(DnsName, RecordType), Vec<DnsRecord>> = HashMap::new();
+        let mut names: HashSet<DnsName> = HashSet::new();
         names.insert(apex.clone());
         rrsets.insert((apex.clone(), RecordType::SOA), vec![soa_record.clone()]);
 
@@ -133,14 +131,14 @@ impl AuthoritativeZone {
         })
     }
 
-    fn owner_name(owner: &str, zone_name: &Name) -> DynResult<Name> {
+    fn owner_name(owner: &str, zone_name: &DnsName) -> DynResult<DnsName> {
         if owner == "@" || owner.is_empty() {
             return Ok(zone_name.clone());
         }
         if owner.ends_with('.') {
-            return Ok(Name::from_ascii(owner)?);
+            return Ok(DnsName::parse_ascii(owner)?);
         }
-        Ok(Name::from_ascii(format!(
+        Ok(DnsName::parse_ascii(&format!(
             "{owner}.{}",
             zone_name.to_ascii()
         ))?)
@@ -159,11 +157,11 @@ impl AuthoritativeZone {
     }
 
     fn parse_rrset(
-        owner: &Name,
+        owner: &DnsName,
         record_type: RecordType,
         ttl: u32,
         values: &[String],
-    ) -> DynResult<Vec<Record>> {
+    ) -> DynResult<Vec<DnsRecord>> {
         if values.is_empty() {
             return Err(format!(
                 "authoritative rrset {} {} must include at least one value",
@@ -177,17 +175,22 @@ impl AuthoritativeZone {
             .iter()
             .map(|value| {
                 let data = Self::parse_rdata(record_type, value)?;
-                Ok(Record::from_rdata(owner.clone(), ttl, data))
+                Ok(DnsRecord {
+                    name: owner.clone(),
+                    ttl,
+                    class: DnsClass::IN,
+                    data,
+                })
             })
             .collect()
     }
 
     fn parse_rdata(record_type: RecordType, value: &str) -> DynResult<RData> {
         match record_type {
-            RecordType::A => Ok(RData::A(A(value.parse()?))),
-            RecordType::AAAA => Ok(RData::AAAA(AAAA(value.parse()?))),
-            RecordType::TXT => Ok(RData::TXT(TXT::new(vec![value.to_string()]))),
-            RecordType::NS => Ok(RData::NS(NS(Name::from_ascii(value)?))),
+            RecordType::A => Ok(RData::A(value.parse()?)),
+            RecordType::AAAA => Ok(RData::AAAA(value.parse()?)),
+            RecordType::TXT => Ok(RData::TXT(vec![value.as_bytes().to_vec()])),
+            RecordType::NS => Ok(RData::NS(DnsName::parse_ascii(value)?)),
             RecordType::SRV => {
                 let parts: Vec<&str> = value.split_whitespace().collect();
                 if parts.len() != 4 {
@@ -196,12 +199,12 @@ impl AuthoritativeZone {
                     )
                     .into());
                 }
-                Ok(RData::SRV(SRV::new(
-                    parts[0].parse()?,
-                    parts[1].parse()?,
-                    parts[2].parse()?,
-                    Name::from_ascii(parts[3])?,
-                )))
+                Ok(RData::SRV {
+                    priority: parts[0].parse()?,
+                    weight: parts[1].parse()?,
+                    port: parts[2].parse()?,
+                    target: DnsName::parse_ascii(parts[3])?,
+                })
             }
             RecordType::SOA => Err("SOA records must be configured in zone.soa".into()),
             other => {
@@ -210,11 +213,96 @@ impl AuthoritativeZone {
         }
     }
 
-    fn records_for_name(&self, owner: &Name) -> Vec<Record> {
+    fn records_for_name(&self, owner: &DnsName) -> Vec<DnsRecord> {
         self.rrsets
             .iter()
             .filter(|((record_owner, _), _)| record_owner == owner)
             .flat_map(|(_, records)| records.iter().cloned())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{ZoneRecordSetConfig, ZoneSoaConfig};
+    use std::collections::BTreeMap;
+
+    fn zone_config() -> ZoneConfig {
+        let mut apex_records = BTreeMap::new();
+        apex_records.insert(
+            "NS".to_string(),
+            ZoneRecordSetConfig {
+                ttl: 3600,
+                values: vec!["ns1.example.test.".to_string()],
+            },
+        );
+
+        let mut api_records = BTreeMap::new();
+        api_records.insert(
+            "A".to_string(),
+            ZoneRecordSetConfig {
+                ttl: 300,
+                values: vec!["192.0.2.10".to_string()],
+            },
+        );
+
+        let mut records = BTreeMap::new();
+        records.insert("@".to_string(), apex_records);
+        records.insert("api".to_string(), api_records);
+
+        ZoneConfig {
+            name: "example.test.".to_string(),
+            soa: ZoneSoaConfig {
+                mname: "ns1.example.test.".to_string(),
+                rname: "admin.example.test.".to_string(),
+                serial: 1,
+                refresh: 3600,
+                retry: 600,
+                expire: 1209600,
+                minimum: 300,
+                ttl: 3600,
+            },
+            records,
+        }
+    }
+
+    #[test]
+    fn resolve_question_returns_authoritative_answer() {
+        let zones = AuthoritativeZones::from_configs(&[zone_config()]).expect("valid zone");
+        let query = DnsQuestion {
+            name: DnsName::parse_ascii("api.example.test.").expect("valid qname"),
+            record_type: RecordType::A,
+            class: DnsClass::IN,
+        };
+
+        let lookup = zones
+            .resolve_question(&query)
+            .expect("zone should answer query");
+
+        assert_eq!(lookup.response_code, ResponseCode::NoError);
+        assert_eq!(lookup.answers.len(), 1);
+        assert_eq!(lookup.answers[0].name.to_ascii(), "api.example.test.");
+        assert_eq!(lookup.answers[0].record_type(), RecordType::A);
+        assert!(lookup.authorities.is_empty());
+    }
+
+    #[test]
+    fn resolve_question_returns_soa_for_name_error() {
+        let zones = AuthoritativeZones::from_configs(&[zone_config()]).expect("valid zone");
+        let query = DnsQuestion {
+            name: DnsName::parse_ascii("missing.example.test.").expect("valid qname"),
+            record_type: RecordType::A,
+            class: DnsClass::IN,
+        };
+
+        let lookup = zones
+            .resolve_question(&query)
+            .expect("zone should answer query");
+
+        assert_eq!(lookup.response_code, ResponseCode::NXDomain);
+        assert!(lookup.answers.is_empty());
+        assert_eq!(lookup.authorities.len(), 1);
+        assert_eq!(lookup.authorities[0].record_type(), RecordType::SOA);
     }
 }

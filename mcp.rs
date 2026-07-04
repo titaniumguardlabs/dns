@@ -1,14 +1,10 @@
 use crate::config::{AppConfig, McpConfig};
+use crate::dns::{
+    DnsClass, DnsMessage, DnsName, DnsQuestion, DnsRecord, DnsRequest, RData, RecordType,
+    TransportProtocol,
+};
 use crate::forwarder::{Forwarder, RuntimeState};
 use axum::Router;
-use hickory_server::authority::{MessageRequest, MessageResponse};
-use hickory_server::proto::op::{Edns, Message, Query, ResponseCode};
-use hickory_server::proto::rr::{Name, Record, RecordType};
-use hickory_server::proto::serialize::binary::{
-    BinDecodable, BinDecoder, BinEncodable, BinEncoder,
-};
-use hickory_server::proto::xfer::Protocol;
-use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use rmcp::handler::server::{router::tool::ToolRouter, wrapper::Parameters};
 use rmcp::model::{Implementation, ServerCapabilities, ServerInfo};
 use rmcp::transport::streamable_http_server::{
@@ -16,10 +12,8 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{ErrorData, Json, ServerHandler, schemars, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-use std::io;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::net::IpAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -129,11 +123,6 @@ pub(crate) struct RecordSummary {
     value: String,
 }
 
-#[derive(Clone)]
-struct CapturingResponseHandler {
-    response: Arc<Mutex<Vec<u8>>>,
-}
-
 impl McpRuntime {
     pub(crate) fn new(
         forwarder: Forwarder,
@@ -240,31 +229,16 @@ impl McpRuntime {
             request.dnssec_ok,
             self.resolve_client_ip,
         )?;
-        let response_bytes = Arc::new(Mutex::new(Vec::new()));
-        let handler = CapturingResponseHandler {
-            response: response_bytes.clone(),
-        };
-
-        self.forwarder.handle_request(&dns_request, handler).await;
-        let bytes = response_bytes
-            .lock()
-            .map_err(|_| ErrorData::internal_error("failed to capture DNS response", None))?
-            .clone();
-        let message = Message::from_vec(&bytes).map_err(|err| {
-            ErrorData::internal_error(
-                "failed to decode DNS response",
-                Some(json!({ "error": err.to_string() })),
-            )
-        })?;
+        let message = self.forwarder.handle_dns_request(dns_request).await;
 
         Ok(Json(ResolveResult {
             hostname: name.to_ascii(),
             record_type: record_type.to_string(),
-            response_code: response_code(&message),
-            authoritative: message.authoritative(),
-            recursion_available: message.recursion_available(),
-            answers: summarize_records(message.answers()),
-            authorities: summarize_records(message.name_servers()),
+            response_code: message.header.response_code.to_string(),
+            authoritative: message.header.authoritative,
+            recursion_available: message.header.recursion_available,
+            answers: summarize_records(&message.answers),
+            authorities: summarize_records(&message.authorities),
         }))
     }
 }
@@ -282,34 +256,6 @@ impl ServerHandler for McpRuntime {
                 implementation
             })
             .with_instructions("Read-only DNS operations and host resolution through the live TitaniumGuard DNS policy path.")
-    }
-}
-
-#[async_trait::async_trait]
-impl ResponseHandler for CapturingResponseHandler {
-    async fn send_response<'a>(
-        &mut self,
-        response: MessageResponse<
-            '_,
-            'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-        >,
-    ) -> io::Result<ResponseInfo> {
-        let mut bytes = Vec::with_capacity(512);
-        let info = {
-            let mut encoder = BinEncoder::new(&mut bytes);
-            response
-                .destructive_emit(&mut encoder)
-                .map_err(|err| io::Error::other(format!("failed to encode response: {err}")))?
-        };
-        *self
-            .response
-            .lock()
-            .map_err(|_| io::Error::other("response capture mutex poisoned"))? = bytes;
-        Ok(info)
     }
 }
 
@@ -371,7 +317,7 @@ fn parse_record_type(input: &str) -> Result<RecordType, ErrorData> {
     }
 }
 
-fn normalize_name(input: &str) -> Result<Name, ErrorData> {
+fn normalize_name(input: &str) -> Result<DnsName, ErrorData> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Err(ErrorData::invalid_params(
@@ -384,78 +330,88 @@ fn normalize_name(input: &str) -> Result<Name, ErrorData> {
     } else {
         format!("{trimmed}.")
     };
-    Name::from_ascii(&absolute).map_err(|err| {
+    DnsName::parse_ascii(&absolute).map_err(|err| {
         ErrorData::invalid_params(
             "hostname must be a valid DNS name",
-            Some(json!({ "error": err.to_string() })),
+            Some(serde_json::json!({ "error": err.to_string() })),
         )
     })
 }
 
 fn synthetic_request(
-    name: &Name,
+    name: &DnsName,
     record_type: RecordType,
     dnssec_ok: bool,
     client_ip: IpAddr,
-) -> Result<Request, ErrorData> {
-    let mut message = Message::new();
-    message
-        .add_query(Query::query(name.clone(), record_type))
-        .set_recursion_desired(true);
+) -> Result<DnsRequest, ErrorData> {
+    let mut message = DnsMessage::query(
+        0,
+        DnsQuestion {
+            name: name.clone(),
+            record_type,
+            class: DnsClass::IN,
+        },
+    );
+    message.header.recursion_desired = true;
     if dnssec_ok {
-        message
-            .extensions_mut()
-            .get_or_insert_with(Edns::new)
-            .set_version(0)
-            .set_dnssec_ok(true)
-            .set_max_payload(1232);
+        message.additionals.push(DnsRecord {
+            name: DnsName::root(),
+            ttl: 0x0000_8000,
+            class: DnsClass::Unknown(1232),
+            data: RData::OPT(Vec::new()),
+        });
     }
 
-    let mut encoded = Vec::new();
-    {
-        let mut encoder = BinEncoder::new(&mut encoded);
-        message.emit(&mut encoder).map_err(|err| {
-            ErrorData::internal_error(
-                "failed to encode synthetic DNS request",
-                Some(json!({ "error": err.to_string() })),
-            )
-        })?;
-    }
-
-    let mut decoder = BinDecoder::new(&encoded);
-    let request = MessageRequest::read(&mut decoder).map_err(|err| {
-        ErrorData::internal_error(
-            "failed to decode synthetic DNS request",
-            Some(json!({ "error": err.to_string() })),
-        )
-    })?;
-    Ok(Request::new(
-        request,
-        SocketAddr::from((client_ip, 0)),
-        Protocol::Udp,
-    ))
+    Ok(DnsRequest {
+        client_ip,
+        protocol: TransportProtocol::Udp,
+        message,
+    })
 }
 
-fn summarize_records(records: &[Record]) -> Vec<RecordSummary> {
+fn summarize_records(records: &[DnsRecord]) -> Vec<RecordSummary> {
     records
         .iter()
         .map(|record| RecordSummary {
-            name: record.name().to_ascii(),
+            name: record.name.to_ascii(),
             record_type: record.record_type().to_string(),
-            ttl: record.ttl(),
-            value: record.data().to_string(),
+            ttl: record.ttl,
+            value: summarize_rdata(&record.data),
         })
         .collect()
 }
 
-fn response_code(message: &Message) -> String {
-    match message.response_code() {
-        ResponseCode::NoError => "NOERROR".to_string(),
-        ResponseCode::ServFail => "SERVFAIL".to_string(),
-        ResponseCode::NXDomain => "NXDOMAIN".to_string(),
-        ResponseCode::NotImp => "NOTIMP".to_string(),
-        ResponseCode::Refused => "REFUSED".to_string(),
-        other => format!("{other:?}").to_ascii_uppercase(),
+fn summarize_rdata(data: &RData) -> String {
+    match data {
+        RData::A(addr) => addr.to_string(),
+        RData::AAAA(addr) => addr.to_string(),
+        RData::NS(name) | RData::CNAME(name) | RData::PTR(name) => name.to_ascii(),
+        RData::SOA {
+            mname,
+            rname,
+            serial,
+            refresh,
+            retry,
+            expire,
+            minimum,
+        } => format!("{mname} {rname} {serial} {refresh} {retry} {expire} {minimum}"),
+        RData::MX {
+            preference,
+            exchange,
+        } => format!("{preference} {exchange}"),
+        RData::TXT(chunks) => chunks
+            .iter()
+            .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+            .collect::<Vec<_>>()
+            .join(""),
+        RData::SRV {
+            priority,
+            weight,
+            port,
+            target,
+        } => format!("{priority} {weight} {port} {target}"),
+        RData::OPT(bytes) => format!("{} bytes", bytes.len()),
+        RData::Unknown { bytes, .. } => format!("{} bytes", bytes.len()),
     }
 }
 
@@ -491,6 +447,7 @@ mod tests {
     use crate::logging::{LoggingConfig, LoggingPipeline};
     use crate::policy::{PolicyRuntime, RuleEngineConfig};
     use std::collections::BTreeMap;
+    use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -601,8 +558,8 @@ mod tests {
             IpAddr::V4([127, 0, 0, 1].into()),
         )
         .expect("request");
-        assert_eq!(request.src().ip(), IpAddr::V4([127, 0, 0, 1].into()));
-        assert!(request.edns().expect("edns").flags().dnssec_ok);
+        assert_eq!(request.client_ip, IpAddr::V4([127, 0, 0, 1].into()));
+        assert!(request.dnssec_ok());
     }
 
     #[tokio::test]

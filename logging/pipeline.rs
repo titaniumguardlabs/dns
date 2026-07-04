@@ -316,9 +316,9 @@ fn purge_old_files(dir: &Path, retention_days: u16) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dns::RecordType;
     use crate::logging::config::LoggingConfig;
     use crate::logging::types::RawLogEvent;
-    use hickory_server::proto::rr::RecordType;
     use std::net::IpAddr;
     use std::path::PathBuf;
 

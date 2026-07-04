@@ -6,7 +6,6 @@ pub mod trace;
 
 use compile::{CompiledPolicy, compile_policy};
 use eval::{EvalResult, evaluate_policy};
-use facts::from_dns_request;
 use schema::PolicyDocument;
 use serde::Deserialize;
 use std::io;
@@ -86,8 +85,12 @@ impl PolicyRuntime {
         Ok(())
     }
 
-    pub fn evaluate_dns(&self, request: &hickory_server::server::Request) -> EvalResult {
-        let facts = from_dns_request(request);
+    pub fn evaluate_repo_dns(&self, request: &crate::dns::DnsRequest) -> EvalResult {
+        let facts = crate::policy::facts::from_repo_dns_request(request);
+        self.evaluate_facts(facts)
+    }
+
+    fn evaluate_facts(&self, facts: crate::policy::facts::RuntimeFacts) -> EvalResult {
         let compiled = self.compiled.read().expect("lock poisoned");
         let config = self.config.read().expect("lock poisoned").clone();
 
@@ -155,19 +158,12 @@ fn other_error(msg: impl Into<String>) -> Box<dyn std::error::Error + Send + Syn
 #[cfg(test)]
 mod tests {
     use super::{PolicyRuntime, RuleEngineConfig};
-    use crate::policy::schema::ActionType;
-    use hickory_server::{
-        authority::MessageRequest,
-        proto::{
-            op::Message,
-            rr::{Name, RecordType},
-            serialize::binary::{BinDecodable, BinDecoder, BinEncodable, BinEncoder},
-            xfer::Protocol,
-        },
-        server::Request,
+    use crate::dns::{
+        DnsClass, DnsMessage, DnsName, DnsQuestion, DnsRequest, RecordType, TransportProtocol,
     };
+    use crate::policy::schema::ActionType;
     use std::{
-        net::{Ipv4Addr, SocketAddr},
+        net::IpAddr,
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -185,29 +181,21 @@ mod tests {
         path
     }
 
-    fn request_from_wire(name: &str, record_type: RecordType) -> Request {
-        let mut message = Message::new();
-        message
-            .add_query(hickory_server::proto::op::Query::query(
-                Name::from_ascii(name).expect("valid name"),
+    fn request_from_wire(name: &str, record_type: RecordType) -> DnsRequest {
+        let mut message = DnsMessage::query(
+            0,
+            DnsQuestion {
+                name: DnsName::parse_ascii(name).expect("valid name"),
                 record_type,
-            ))
-            .set_recursion_desired(true);
-
-        let mut encoded = Vec::new();
-        {
-            let mut encoder = BinEncoder::new(&mut encoded);
-            message.emit(&mut encoder).expect("encode dns message");
+                class: DnsClass::IN,
+            },
+        );
+        message.header.recursion_desired = true;
+        DnsRequest {
+            client_ip: IpAddr::from([127, 0, 0, 1]),
+            protocol: TransportProtocol::Udp,
+            message,
         }
-
-        let mut decoder = BinDecoder::new(&encoded);
-        let request = MessageRequest::read(&mut decoder).expect("decode dns request");
-
-        Request::new(
-            request,
-            SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 55321)),
-            Protocol::Udp,
-        )
     }
 
     #[tokio::test]
@@ -227,7 +215,7 @@ mod tests {
             .expect("runtime");
         let request = request_from_wire("www.example.com.", RecordType::A);
 
-        let before = runtime.evaluate_dns(&request);
+        let before = runtime.evaluate_repo_dns(&request);
         assert_eq!(before.decision, ActionType::Allow);
 
         let reload = runtime
@@ -238,7 +226,7 @@ mod tests {
             .await;
         assert!(reload.is_err());
 
-        let after = runtime.evaluate_dns(&request);
+        let after = runtime.evaluate_repo_dns(&request);
         assert_eq!(after.decision, ActionType::Allow);
     }
 
@@ -263,7 +251,7 @@ mod tests {
         .expect("runtime");
         let request = request_from_wire("www.example.com.", RecordType::A);
 
-        let before = runtime.evaluate_dns(&request);
+        let before = runtime.evaluate_repo_dns(&request);
         assert_eq!(before.decision, ActionType::Deny);
 
         runtime
@@ -272,7 +260,7 @@ mod tests {
             .expect("default reload should succeed");
         let _ = std::fs::remove_file(policy_path);
 
-        let after = runtime.evaluate_dns(&request);
+        let after = runtime.evaluate_repo_dns(&request);
         assert_eq!(after.decision, ActionType::Allow);
     }
 }

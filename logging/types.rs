@@ -1,4 +1,4 @@
-use hickory_server::proto::rr::RecordType;
+use crate::dns::RecordType;
 #[cfg(feature = "audit-logging")]
 use serde::Serialize;
 use std::net::IpAddr;

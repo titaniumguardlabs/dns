@@ -1,6 +1,6 @@
 use crate::caching::base::{DnsRecordCache, minimum_ttl};
+use crate::dns::DnsRecord;
 use async_trait::async_trait;
-use hickory_server::proto::rr::Record;
 use moka::{Expiry, future::Cache};
 use std::{
     sync::Arc,
@@ -9,7 +9,7 @@ use std::{
 
 #[derive(Clone)]
 struct CachedRecords {
-    records: Arc<Vec<Record>>,
+    records: Arc<Vec<DnsRecord>>,
     ttl: Duration,
 }
 
@@ -54,11 +54,11 @@ impl MokaDnsRecordCache {
 
 #[async_trait]
 impl DnsRecordCache for MokaDnsRecordCache {
-    async fn get(&self, key: &str) -> Option<Arc<Vec<Record>>> {
+    async fn get(&self, key: &str) -> Option<Arc<Vec<DnsRecord>>> {
         self.inner.get(key).await.map(|entry| entry.records)
     }
 
-    async fn insert(&self, key: String, records: Vec<Record>) {
+    async fn insert(&self, key: String, records: Vec<DnsRecord>) {
         let ttl = match minimum_ttl(&records) {
             Some(ttl) if !ttl.is_zero() => ttl,
             _ => return,
