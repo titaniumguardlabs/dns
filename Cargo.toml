@@ -48,6 +48,7 @@ hickory-server = { version = "0.25.2", default-features = false }
 http = { version = "1.4.1", default-features = false, optional = true }
 libc = { version = "0.2.186", optional = true }
 moka = { version = "0.12.15", default-features = false, features = ["future"] }
+prometheus = { version = "0.14.0", default-features = false }
 redis = { version = "1.2.2", default-features = false, features = ["tokio-comp"], optional = true }
 regex = { version = "1.12.3", default-features = false, features = ["std"] }
 rmcp = { version = "2.1.0", default-features = false, features = ["server", "macros", "transport-streamable-http-server"], optional = true }

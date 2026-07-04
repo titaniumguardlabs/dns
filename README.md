@@ -265,7 +265,7 @@ external names recursively.
 | --- | --- |
 | Liveness | Use `/live` with a short timeout. Do not page on dependency failures from this probe. |
 | Readiness | Use `/ready`; remove the instance from rotation on any `503`. |
-| Metrics | Scrape `/metrics` and alert on `dns_ready 0`, `dns_cache_healthy 0` when `dns_cache_required 1`, `dns_audit_healthy 0`, rising `dns_audit_write_errors_total`, rising `dns_reload_failure_total`, and rising `dns_drain_timeout_total`. |
+| Metrics | Scrape `/metrics` and alert on `dns_ready 0`, `dns_cache_healthy 0` when `dns_cache_required 1`, `dns_audit_healthy 0`, rising `dns_audit_write_errors_total`, rising `dns_reload_failures_total`, and rising `dns_drain_timeouts_total`. |
 
 ### Startup Safety
 
@@ -299,7 +299,7 @@ external names recursively.
 
 - On SIGTERM/SIGINT, readiness flips to `503`.
 - Active DNS queries drain until `shutdown.drain_timeout_seconds`.
-- If drain timeout expires, `dns_drain_timeout_total` increments and a warning is logged.
+- If drain timeout expires, `dns_drain_timeouts_total` increments and a warning is logged.
 - Canary a new config/image with `/ready` and `/metrics` before widening traffic.
 - Roll back by restoring the previous image/config and confirming `/ready` returns `200` and error counters stop increasing.
 
