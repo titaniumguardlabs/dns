@@ -49,6 +49,42 @@ The project is open source under the Apache License, Version 2.0.
 | `SVCB` / `HTTPS` | WIP | None | Not implemented in the authoritative parser yet. |
 | DNSSEC zone records | WIP | None | Authoritative signing and DNSSEC record management are not implemented. |
 
+## Cargo Features
+
+The default build keeps the full product surface enabled, so plain
+`cargo build` and `cargo test` exercise all production feature gates. Smaller
+binaries are opt-in with `--no-default-features`.
+
+| Feature | Included by default | Enables |
+| --- | --- | --- |
+| `recursion` | Yes | Recursive resolution and DNSSEC validation through Hickory Recursor. |
+| `redis-cache` | Yes | Redis-backed DNS response cache. |
+| `audit-logging` | Yes | Tenant-aware audit logs, HMAC hashing, retention, and readiness checks. |
+| `dot` | Yes | DNS over TLS. |
+| `doh` | Yes | DNS over HTTPS over HTTP/2 and ODoH config publishing. |
+| `doq` | Yes | DNS over QUIC. |
+| `doh3` | Yes | DNS over HTTP/3. |
+
+Example builds:
+
+```bash
+# Full build with all default features
+cargo build --release
+
+# Minimal authoritative DNS binary
+cargo build --release --no-default-features
+
+# Authoritative DNS plus DoT
+cargo build --release --no-default-features --features dot
+
+# Recursive resolver plus Redis cache, without encrypted transports
+cargo build --release --no-default-features --features recursion,redis-cache
+```
+
+If a config file uses a capability that was compiled out, startup fails with a
+clear validation error. For example, `caching.type = "redis"` requires
+`redis-cache`, and `transports.doh` requires `doh`.
+
 ## Quick Start
 
 ```bash

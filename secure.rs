@@ -1,48 +1,87 @@
 use crate::DynResult;
-use bytes::Bytes;
-use crate::config::{AppConfig, HttpsTransportConfig, OdohConfig, QuicTransportConfig};
+use crate::config::AppConfig;
+#[cfg(any(feature = "doq", feature = "doh3"))]
+use crate::config::QuicTransportConfig;
+#[cfg(feature = "doh")]
+use crate::config::{HttpsTransportConfig, OdohConfig};
 use crate::forwarder::Forwarder;
+#[cfg(feature = "doh")]
+use bytes::Bytes;
+#[cfg(feature = "doh")]
 use h2::server::SendResponse;
+use hickory_server::ServerFuture;
+#[cfg(any(feature = "dot", feature = "doh", feature = "doq", feature = "doh3"))]
 use hickory_server::proto::rustls::default_provider;
+#[cfg(feature = "doh")]
 use hickory_server::proto::{
     http::{Version as HttpVersion, request as http_request, response as http_response},
     serialize::binary::{BinDecodable, BinDecoder, BinEncoder},
     xfer::Protocol,
 };
+#[cfg(feature = "doh")]
 use hickory_server::server::{
     Request as DnsRequest, RequestHandler, ResponseHandler, ResponseInfo,
 };
-use hickory_server::{
-    ServerFuture, authority::MessageRequest, authority::MessageResponse, proto::rr::Record,
-};
+#[cfg(feature = "doh")]
+use hickory_server::{authority::MessageRequest, authority::MessageResponse, proto::rr::Record};
+#[cfg(feature = "doh")]
+use rustls::ServerConfig;
+#[cfg(any(feature = "dot", feature = "doh", feature = "doq", feature = "doh3"))]
 use rustls::{
-    ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
     server::ResolvesServerCert,
     sign::{CertifiedKey, SingleCertAndKey},
 };
+#[cfg(feature = "doh")]
 use std::io;
+#[cfg(feature = "doh")]
 use std::net::SocketAddr;
+#[cfg(any(feature = "dot", feature = "doh", feature = "doq", feature = "doh3"))]
 use std::sync::Arc;
+#[cfg(any(feature = "dot", feature = "doh", feature = "doq", feature = "doh3"))]
 use std::time::Duration;
+#[cfg(feature = "doh")]
 use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::{TcpListener, UdpSocket};
+#[cfg(any(feature = "dot", feature = "doh"))]
+use tokio::net::TcpListener;
+#[cfg(any(feature = "doq", feature = "doh3"))]
+use tokio::net::UdpSocket;
+#[cfg(feature = "doh")]
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
+#[cfg(feature = "doh")]
 use tokio::time::timeout;
+#[cfg(feature = "doh")]
 use tokio_rustls::TlsAcceptor;
-use tracing::{info, warn};
+#[cfg(any(feature = "dot", feature = "doh", feature = "doq", feature = "doh3"))]
+use tracing::info;
+#[cfg(feature = "doh")]
+use tracing::warn;
 
+#[cfg(feature = "doh")]
 const ODOH_CONFIGS_PATH: &str = "/.well-known/odohconfigs";
+#[cfg(feature = "doh")]
 const ODOH_CONTENT_TYPE: &str = "application/odohconfigs";
+#[cfg(feature = "doh")]
 const ODOH_CONFIG_VERSION: u16 = 0x0001;
+#[cfg(feature = "doh")]
 const DOH_BODY_READ_TIMEOUT: Duration = Duration::from_secs(5);
+#[cfg(feature = "doh")]
 const DOH_H2_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) async fn register_secure_transports(
+    #[cfg_attr(
+        not(any(feature = "dot", feature = "doq", feature = "doh3")),
+        allow(unused_variables)
+    )]
     server: &mut ServerFuture<Forwarder>,
+    #[cfg_attr(
+        not(any(feature = "dot", feature = "doh", feature = "doq", feature = "doh3")),
+        allow(unused_variables)
+    )]
     config: &AppConfig,
-    forwarder: Forwarder,
+    #[cfg_attr(not(feature = "doh"), allow(unused_variables))] forwarder: Forwarder,
 ) -> DynResult<()> {
+    #[cfg(feature = "dot")]
     if let Some(dot) = &config.transports.dot {
         let resolver = load_cert_resolver(&dot.cert_path, &dot.key_path)?;
         let listener = TcpListener::bind(dot.listen_addr).await?;
@@ -50,6 +89,7 @@ pub(crate) async fn register_secure_transports(
         server.register_tls_listener(listener, Duration::from_secs(10), resolver)?;
     }
 
+    #[cfg(feature = "doh")]
     if let Some(doh) = &config.transports.doh {
         let resolver = load_cert_resolver(&doh.cert_path, &doh.key_path)?;
         let listener = TcpListener::bind(doh.listen_addr).await?;
@@ -57,6 +97,7 @@ pub(crate) async fn register_secure_transports(
         register_doh_listener(doh, listener, resolver, forwarder.clone())?;
     }
 
+    #[cfg(feature = "doq")]
     if let Some(doq) = &config.transports.doq {
         let resolver = load_cert_resolver(&doq.cert_path, &doq.key_path)?;
         let socket = UdpSocket::bind(doq.listen_addr).await?;
@@ -64,6 +105,7 @@ pub(crate) async fn register_secure_transports(
         register_doq_listener(server, doq, socket, resolver)?;
     }
 
+    #[cfg(feature = "doh3")]
     if let Some(doh3) = &config.transports.doh3 {
         let resolver = load_cert_resolver(&doh3.cert_path, &doh3.key_path)?;
         let socket = UdpSocket::bind(doh3.listen_addr).await?;
@@ -74,6 +116,7 @@ pub(crate) async fn register_secure_transports(
     Ok(())
 }
 
+#[cfg(any(feature = "dot", feature = "doh", feature = "doq", feature = "doh3"))]
 fn load_cert_resolver(cert_path: &str, key_path: &str) -> DynResult<Arc<dyn ResolvesServerCert>> {
     let cert_chain = CertificateDer::pem_file_iter(cert_path)?.collect::<Result<Vec<_>, _>>()?;
     let key = PrivateKeyDer::from_pem_file(key_path)?;
@@ -81,6 +124,7 @@ fn load_cert_resolver(cert_path: &str, key_path: &str) -> DynResult<Arc<dyn Reso
     Ok(Arc::new(SingleCertAndKey::from(certified_key)))
 }
 
+#[cfg(feature = "doh")]
 fn register_doh_listener(
     cfg: &HttpsTransportConfig,
     listener: TcpListener,
@@ -162,6 +206,7 @@ fn register_doh_listener(
     Ok(())
 }
 
+#[cfg(feature = "doh")]
 async fn handle_doh_h2_connection<I>(
     io: I,
     src_addr: SocketAddr,
@@ -223,6 +268,7 @@ async fn handle_doh_h2_connection<I>(
     }
 }
 
+#[cfg(feature = "doh")]
 async fn handle_doh_h2_stream(
     request: http::Request<h2::RecvStream>,
     respond: SendResponse<Bytes>,
@@ -345,6 +391,7 @@ async fn handle_doh_h2_stream(
     let _ = handler.handle_request(&request, response_handle).await;
 }
 
+#[cfg(feature = "doh")]
 async fn read_h2_body(
     stream: h2::RecvStream,
     expected_len: Option<usize>,
@@ -362,6 +409,7 @@ async fn read_h2_body(
     }
 }
 
+#[cfg(feature = "doh")]
 async fn read_h2_body_without_timeout(
     mut stream: h2::RecvStream,
     expected_len: Option<usize>,
@@ -388,6 +436,7 @@ async fn read_h2_body_without_timeout(
     Ok(bytes)
 }
 
+#[cfg(feature = "doh")]
 fn validate_doh_body_size(
     expected_len: Option<usize>,
     max_body_bytes: usize,
@@ -403,6 +452,7 @@ fn validate_doh_body_size(
     Ok(())
 }
 
+#[cfg(feature = "doh")]
 async fn send_binary_response(
     mut respond: SendResponse<Bytes>,
     status: http::StatusCode,
@@ -420,6 +470,7 @@ async fn send_binary_response(
     Ok(())
 }
 
+#[cfg(feature = "doh")]
 fn build_doh_tls_config(
     server_cert_resolver: Arc<dyn ResolvesServerCert>,
 ) -> io::Result<ServerConfig> {
@@ -432,6 +483,7 @@ fn build_doh_tls_config(
     Ok(config)
 }
 
+#[cfg(feature = "doh")]
 fn build_odoh_configs_payload(odoh: &OdohConfig) -> Vec<u8> {
     let public_key = odoh
         .decode_public_key_bytes()
@@ -455,9 +507,11 @@ fn build_odoh_configs_payload(odoh: &OdohConfig) -> Vec<u8> {
     configs
 }
 
+#[cfg(feature = "doh")]
 #[derive(Clone)]
 struct H2DnsResponseHandle(Arc<Mutex<SendResponse<Bytes>>>);
 
+#[cfg(feature = "doh")]
 #[async_trait::async_trait]
 impl ResponseHandler for H2DnsResponseHandle {
     async fn send_response<'a>(
@@ -494,6 +548,7 @@ impl ResponseHandler for H2DnsResponseHandle {
     }
 }
 
+#[cfg(feature = "doq")]
 fn register_doq_listener(
     server: &mut ServerFuture<Forwarder>,
     cfg: &QuicTransportConfig,
@@ -509,6 +564,7 @@ fn register_doq_listener(
     Ok(())
 }
 
+#[cfg(feature = "doh3")]
 fn register_doh3_listener(
     server: &mut ServerFuture<Forwarder>,
     cfg: &QuicTransportConfig,
@@ -524,7 +580,7 @@ fn register_doh3_listener(
     Ok(())
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "doh"))]
 mod tests {
     use super::*;
 

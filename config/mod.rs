@@ -1,8 +1,10 @@
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD;
 use crate::caching::CachingConfig;
 use crate::logging::LoggingConfig;
 use crate::policy::RuleEngineConfig;
+#[cfg(feature = "doh")]
+use base64::Engine;
+#[cfg(feature = "doh")]
+use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use std::io::ErrorKind;
 use std::{
@@ -113,6 +115,7 @@ pub struct ShutdownConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(not(feature = "dot"), allow(dead_code))]
 #[serde(deny_unknown_fields)]
 pub struct TlsTransportConfig {
     pub listen_addr: SocketAddr,
@@ -121,6 +124,7 @@ pub struct TlsTransportConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(not(feature = "doh"), allow(dead_code))]
 #[serde(deny_unknown_fields)]
 pub struct HttpsTransportConfig {
     pub listen_addr: SocketAddr,
@@ -141,6 +145,7 @@ pub struct HttpsTransportConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(not(feature = "doh"), allow(dead_code))]
 #[serde(deny_unknown_fields)]
 pub struct OdohConfig {
     #[serde(deserialize_with = "hpke::deserialize_hpke_kem_id")]
@@ -153,6 +158,7 @@ pub struct OdohConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(not(any(feature = "doq", feature = "doh3")), allow(dead_code))]
 #[serde(deny_unknown_fields)]
 pub struct QuicTransportConfig {
     pub listen_addr: SocketAddr,
@@ -227,6 +233,12 @@ impl AppConfig {
         if self.shutdown.drain_timeout_seconds == 0 {
             return Err("shutdown.drain_timeout_seconds must be greater than zero".into());
         }
+        #[cfg(not(feature = "redis-cache"))]
+        if matches!(self.caching, CachingConfig::Redis { .. }) {
+            return Err("caching.type=redis requires the `redis-cache` feature".into());
+        }
+
+        #[cfg(feature = "redis-cache")]
         if let CachingConfig::Redis {
             timeout_ms,
             failure_threshold,
@@ -240,6 +252,11 @@ impl AppConfig {
                 return Err("caching.failure_threshold must be greater than zero".into());
             }
         }
+        #[cfg(not(feature = "recursion"))]
+        if self.recursion.enabled {
+            return Err("recursion.enabled=true requires the `recursion` feature".into());
+        }
+
         if self.recursion.enabled && self.recursion.allowed_client_cidrs.is_empty() {
             return Err(
                 "recursion.allowed_client_cidrs must be non-empty when recursion is enabled".into(),
@@ -248,6 +265,23 @@ impl AppConfig {
         for cidr in &self.recursion.allowed_client_cidrs {
             validate_ip_cidr(cidr)
                 .map_err(|err| format!("invalid recursion CIDR {cidr}: {err}"))?;
+        }
+
+        #[cfg(not(feature = "dot"))]
+        if self.transports.dot.is_some() {
+            return Err("transports.dot requires the `dot` feature".into());
+        }
+        #[cfg(not(feature = "doh"))]
+        if self.transports.doh.is_some() {
+            return Err("transports.doh requires the `doh` feature".into());
+        }
+        #[cfg(not(feature = "doq"))]
+        if self.transports.doq.is_some() {
+            return Err("transports.doq requires the `doq` feature".into());
+        }
+        #[cfg(not(feature = "doh3"))]
+        if self.transports.doh3.is_some() {
+            return Err("transports.doh3 requires the `doh3` feature".into());
         }
 
         validate_tls_paths(
@@ -290,11 +324,17 @@ impl AppConfig {
             if doh.max_doh_body_bytes == 0 {
                 return Err("transports.doh.max_doh_body_bytes must be greater than zero".into());
             }
+            #[cfg(feature = "doh")]
             if let Some(odoh) = doh.odoh.as_ref() {
                 odoh.decode_public_key_bytes().map_err(|err| {
                     format!("invalid transports.doh.odoh.public_key_base64: {err}")
                 })?;
             }
+        }
+
+        #[cfg(not(feature = "audit-logging"))]
+        if self.logging.enabled {
+            return Err("logging.enabled=true requires the `audit-logging` feature".into());
         }
 
         if strict_mode && self.logging.enabled {
@@ -432,6 +472,7 @@ fn validate_ip_cidr(input: &str) -> Result<(), String> {
 }
 
 impl OdohConfig {
+    #[cfg(feature = "doh")]
     pub fn decode_public_key_bytes(&self) -> Result<Vec<u8>, String> {
         let bytes = STANDARD
             .decode(self.public_key_base64.as_bytes())

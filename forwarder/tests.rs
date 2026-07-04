@@ -1,6 +1,8 @@
 use super::Forwarder;
 use crate::caching::MokaDnsRecordCache;
-use crate::config::{RecursionConfig, ZoneConfig, ZoneSoaConfig};
+#[cfg(feature = "recursion")]
+use crate::config::RecursionConfig;
+use crate::config::{ZoneConfig, ZoneSoaConfig};
 use crate::logging::{LoggingConfig, LoggingPipeline};
 use crate::policy::{PolicyRuntime, RuleEngineConfig};
 use hickory_server::authority::{MessageRequest, MessageResponse};
@@ -101,6 +103,7 @@ fn request_from_wire(name: &str, record_type: RecordType) -> Request {
 }
 
 #[test]
+#[cfg(feature = "recursion")]
 fn forwarder_new_rejects_empty_resolvers() {
     let logger = Arc::new(LoggingPipeline::from_config(&LoggingConfig::default()));
     let result = Forwarder::with_cache(
@@ -130,6 +133,7 @@ fn response_edns_is_sane_and_preserves_dnssec_and_options() {
 }
 
 #[test]
+#[cfg(feature = "recursion")]
 fn minimized_zone_chain_walks_suffixes() {
     let name = Name::from_ascii("www.example.com.").expect("valid fqdn");
     let chain = Forwarder::minimized_zone_chain(&name);
@@ -140,6 +144,7 @@ fn minimized_zone_chain_walks_suffixes() {
 }
 
 #[test]
+#[cfg(feature = "recursion")]
 fn cache_key_canonicalizes_query_name_case() {
     let lower = request_from_wire("www.example.com.", RecordType::A);
     let mixed = request_from_wire("WWW.Example.COM.", RecordType::A);
@@ -151,6 +156,7 @@ fn cache_key_canonicalizes_query_name_case() {
 }
 
 #[test]
+#[cfg(feature = "recursion")]
 fn cache_key_separates_dnssec_ok() {
     let request = request_from_wire("www.example.com.", RecordType::A);
 
@@ -274,6 +280,7 @@ async fn recursion_is_denied_by_default() {
 }
 
 #[test]
+#[cfg(feature = "recursion")]
 fn recursion_authorizer_allows_configured_client_cidr() {
     let authorizer = super::RecursionAuthorizer::from_config(&RecursionConfig {
         enabled: true,

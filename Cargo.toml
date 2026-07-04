@@ -15,25 +15,43 @@ panic = "abort"
 strip = true
 opt-level = 3
 
+[features]
+default = ["recursion", "redis-cache", "audit-logging", "dot", "doh", "doq", "doh3"]
+dot = ["dep:rustls", "hickory-server/tls-aws-lc-rs"]
+doh = [
+    "dep:base64",
+    "dep:bytes",
+    "dep:h2",
+    "dep:http",
+    "dep:rustls",
+    "dep:tokio-rustls",
+    "hickory-server/https-aws-lc-rs",
+]
+doq = ["dep:rustls", "hickory-server/quic-aws-lc-rs"]
+doh3 = ["dep:rustls", "hickory-server/h3-aws-lc-rs"]
+recursion = ["dep:hickory-recursor", "hickory-recursor/dnssec-aws-lc-rs"]
+redis-cache = ["dep:redis"]
+audit-logging = ["dep:aws-lc-rs", "dep:hex", "dep:libc"]
+
 [dependencies]
 async-trait = { version = "0.1.89", default-features = false }
-aws-lc-rs = { version = "1.17.0", features = ["unstable"] }
-base64 = "0.22.1"
-bytes = "1.11.1"
+aws-lc-rs = { version = "1.17.0", features = ["unstable"], optional = true }
+base64 = { version = "0.22.1", optional = true }
+bytes = { version = "1.11.1", optional = true }
 chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
-h2 = { version = "0.4.14", default-features = false, features = ["stream"] }
-hex = "0.4.3"
-hickory-recursor = { version = "0.25.2", default-features = false, features = ["dnssec-aws-lc-rs"] }
-hickory-server = { version = "0.25.2", default-features = false, features = ["tls-aws-lc-rs", "https-aws-lc-rs", "quic-aws-lc-rs", "h3-aws-lc-rs"] }
-http = { version = "1.4.1", default-features = false }
-libc = "0.2.186"
+h2 = { version = "0.4.14", default-features = false, features = ["stream"], optional = true }
+hex = { version = "0.4.3", optional = true }
+hickory-recursor = { version = "0.25.2", default-features = false, optional = true }
+hickory-server = { version = "0.25.2", default-features = false }
+http = { version = "1.4.1", default-features = false, optional = true }
+libc = { version = "0.2.186", optional = true }
 moka = { version = "0.12.15", default-features = false, features = ["future"] }
-redis = { version = "1.2.2", default-features = false, features = ["tokio-comp"] }
+redis = { version = "1.2.2", default-features = false, features = ["tokio-comp"], optional = true }
 regex = { version = "1.12.3", default-features = false, features = ["std"] }
-rustls = { version = "0.23.40", default-features = false, features = ["std", "tls12", "logging", "aws-lc-rs", "prefer-post-quantum"] }
+rustls = { version = "0.23.40", default-features = false, features = ["std", "tls12", "logging", "aws-lc-rs", "prefer-post-quantum"], optional = true }
 serde = { version = "1.0.228", default-features = false, features = ["derive"] }
 serde_json = { version = "1.0.150", default-features = false, features = ["std"] }
 tokio = { version = "1.52.3", default-features = false, features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "signal", "time", "fs"] }
-tokio-rustls = { version = "0.26.4", default-features = false, features = ["logging", "aws-lc-rs", "tls12"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["logging", "aws-lc-rs", "tls12"], optional = true }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "env-filter"] }
