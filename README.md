@@ -1,109 +1,89 @@
 # TitaniumGuard DNS
 
-Open source Rust DNS service distributed as a single-binary Cargo package under
-the Apache License, Version 2.0.
+TitaniumGuard DNS is a friendly, operations-focused DNS server written in Rust.
+It is packaged as a single binary and is intended to be easy to run locally,
+ship in containers, and operate with clear health checks.
 
-Live reload:
-- DNS watches the config file path passed at startup (or `config.json` by default).
-- When file content changes, it reparses and applies declared live-reloadable policy settings.
-- Invalid updates are rejected and the previous in-memory config/policy are kept.
-- Listener, transport, zone, resolver, cache, logging, health, recursion, and shutdown runtime changes require restart and are rejected during live reload.
-- Reload is strict parse/validate only; missing or malformed config never falls back to defaults.
+The project is open source under the Apache License, Version 2.0.
 
-Startup safety:
-- Production startup requires an existing config file.
-- Production startup requires `policy_file_path` unless `--allow-open-policy` is explicitly set.
-- Recursive resolution is denied by default; enable it with explicit trusted client CIDRs.
-- The operational HTTP listener defaults to loopback and exposes `/live`, `/ready`, and `/metrics`.
-- `/ready` fails closed for required Redis cache outages, audit sink failures, and shutdown drain.
-- Audit logging is fail-closed for readiness when enabled; startup probes the default tenant sink before accepting traffic.
-- For local/dev fallback behavior, run with `--allow-default-config`.
+## What It Does
 
-## Operations Runbook
+- Serves plain DNS over UDP and TCP.
+- Can enable encrypted transports for DoT, DoH, DoQ, and DoH3.
+- Hosts simple authoritative zones for internal DNS.
+- Recurses only when explicitly enabled for trusted client CIDRs.
+- Applies policy decisions across authoritative answers, cache hits, and recursive resolution.
+- Provides memory or Redis-backed DNS response caching.
+- Emits audit logs with retention and tenant-aware logging policies.
+- Exposes `/live`, `/ready`, and `/metrics` for production operations.
+- Reloads policy/config safely without accepting invalid runtime updates.
 
-Endpoints:
-- `GET /live`: process is running.
-- `GET /ready`: process can receive traffic. It returns `503` while draining, when a required cache is unhealthy, or when enabled audit logging cannot write.
-- `GET /metrics`: text metrics for readiness, drain state, active queries, cache health/errors, audit health/errors, policy denies, recursion denies, and reload results.
+## DNS Transport Support
 
-Recommended probes:
-- Liveness: `/live`, short timeout, no dependency alerts.
-- Readiness: `/ready`, remove the instance from rotation on any `503`.
-- Metrics scrape: `/metrics`, alert on `dns_ready 0`, `dns_cache_healthy 0` when `dns_cache_required 1`, `dns_audit_healthy 0`, increasing `dns_audit_write_errors_total`, increasing `dns_reload_failure_total`, and increasing `dns_drain_timeout_total`.
+| Transport | Status | Configuration | Notes |
+| --- | --- | --- | --- |
+| DNS over UDP | Supported | `listen_addr` | Enabled by the main listener. |
+| DNS over TCP | Supported | `listen_addr` | Enabled by the main listener. |
+| DNS over TLS (DoT) | Supported | `transports.dot` | Requires certificate and private key paths. |
+| DNS over HTTPS (DoH, HTTP/2) | Supported | `transports.doh` | Uses HTTP/2 and a configurable endpoint, default `/dns-query`. |
+| DNS over QUIC (DoQ) | Supported | `transports.doq` | Requires certificate and private key paths. |
+| DNS over HTTP/3 (DoH3) | Supported | `transports.doh3` | Requires certificate and private key paths. |
+| Oblivious DoH (ODoH) | WIP | `transports.doh.odoh` | Publishes `/.well-known/odohconfigs`; encrypted ODoH query handling is not complete yet. |
+| DNSCrypt | WIP | None | Not implemented. |
 
-Redis cache:
-- Memory cache is local and does not gate readiness.
-- Redis cache can be optional or required with `caching.required`.
-- Required Redis is checked at startup and by a periodic background probe; readiness recovers after a successful bounded probe.
-- Redis operation timeouts use `caching.timeout_ms`; repeated failures open cache health after `caching.failure_threshold`.
-- Incident checks: confirm Redis reachability, authentication, service DNS, latency, and whether `dns_cache_errors_total` is rising.
+## Authoritative Record Support
 
-Audit logs:
-- `logging.log_dir` must be service-owned and not group/world writable.
-- Tenant directories and final log files must not be symlinks.
-- Enabled audit logging gates readiness through a startup write probe and later write results.
-- Disk incidents: check free space, inode exhaustion, mount state, file permissions, and retention settings.
-- Retention is configured through default and per-tenant retention days; size storage for peak query volume plus retention.
+| Record type | Status | Configuration format | Notes |
+| --- | --- | --- | --- |
+| `SOA` | Supported | `zones[].soa` | Generated from the zone SOA block. |
+| `NS` | Supported | `records.<owner>.NS.values` | Value is a name, for example `ns1.example.`. |
+| `A` | Supported | `records.<owner>.A.values` | Value is an IPv4 address. |
+| `AAAA` | Supported | `records.<owner>.AAAA.values` | Value is an IPv6 address. |
+| `TXT` | Supported | `records.<owner>.TXT.values` | Each value becomes one TXT record. |
+| `SRV` | Supported | `records.<owner>.SRV.values` | Value format is `<priority> <weight> <port> <target>`. |
+| `ANY` query | Supported | Query only | Returns all configured RRsets for the queried owner name. |
+| `CNAME` | WIP | None | Not implemented in the authoritative parser yet. |
+| `MX` | WIP | None | Not implemented in the authoritative parser yet. |
+| `PTR` | WIP | None | Not implemented in the authoritative parser yet. |
+| `CAA` | WIP | None | Not implemented in the authoritative parser yet. |
+| `SVCB` / `HTTPS` | WIP | None | Not implemented in the authoritative parser yet. |
+| DNSSEC zone records | WIP | None | Authoritative signing and DNSSEC record management are not implemented. |
 
-Shutdown and rollout:
-- On SIGTERM/SIGINT, readiness flips to `503` and active DNS queries drain until `shutdown.drain_timeout_seconds`.
-- If drain timeout expires, `dns_drain_timeout_total` increments and a warning is logged.
-- Canary a new config/image with `/ready` and `/metrics` before widening traffic.
-- Roll back by restoring the previous image/config and confirming `/ready` returns `200` and error counters stop increasing.
-
-## Policy Engine
-
-DNS query evaluation is governed by the policy engine across all query paths:
-- authoritative zones
-- cache hits
-- recursive resolution
-
-Policy config:
-- `policy_file_path`: optional path to policy JSON
-- `rule_engine.max_trace_facts`: max facts included in explain trace logs
-- `rule_engine.enable_explain_logs`: toggle policy trace logging
-
-Behavior:
-- If `policy_file_path` is unset, DNS uses built-in allow-all defaults.
-- If `policy_file_path` is set and invalid at startup, DNS fails to start.
-- On live config reload, invalid policy updates are rejected and previous policy stays active.
-- On live config reload, removing `policy_file_path` restores the built-in default policy when open policy is allowed.
-- Denied queries return DNS `REFUSED`.
-
-Canonical policy spec:
-- `dns_rule_engine_policy_spec.json`
-
-## Commands
+## Quick Start
 
 ```bash
-# Build binary
+# Build the binary
 cargo build
 
-# Run locally
+# Run with an explicit config file
 cargo run -- --config config.json
+
+# Run locally with default config fallback
+cargo run -- --allow-default-config --allow-open-policy
 
 # Run tests
 cargo test
+
+# Build an optimized release binary
+cargo build --release
 ```
 
-## Authoritative Zones
+Production startup expects a real config file. The local fallback flag is meant
+for development, demos, and tests.
 
-The DNS service can host authoritative internal zones and only recurse for
-queries outside configured owned zones when recursion is enabled and the client
-IP is allowed.
-
-Resolution pipeline:
-- Owned zone match -> authoritative answer (AA=true, no recursion)
-- No owned zone match -> recursive resolution only when recursion is enabled and the client IP is allowed; otherwise `REFUSED`
-
-Example `config.json` snippet:
+## Configuration Example
 
 ```json
 {
   "listen_addr": "0.0.0.0:8080",
+  "policy_file_path": "policy.json",
   "caching": {
     "type": "memory",
     "max_entries": 100000
+  },
+  "recursion": {
+    "enabled": true,
+    "allowed_client_cidrs": ["10.0.0.0/8", "fd00::/8"]
   },
   "zones": [
     {
@@ -137,14 +117,118 @@ Example `config.json` snippet:
 }
 ```
 
-`records` is a map of `owner_name -> record_type -> rrset`, where each rrset is:
-- `ttl`: record TTL
-- `values`: list of string values
+`records` is a map of `owner_name -> record_type -> rrset`.
 
-Supported record types for authoritative zones:
-- `SOA` (from `zones.soa`)
-- `NS`
-- `A`
-- `AAAA`
-- `TXT`
-- `SRV`
+Each RRset has:
+
+| Field | Meaning |
+| --- | --- |
+| `ttl` | Record TTL in seconds. |
+| `values` | List of record values in the format expected by the record type. |
+
+## Resolution Behavior
+
+| Situation | Behavior |
+| --- | --- |
+| Query matches a configured zone and RRset | Returns an authoritative answer with `AA=true`. |
+| Query matches a configured zone name but not the requested type | Returns `NOERROR` with the zone SOA in authority. |
+| Query is inside a configured zone but name does not exist | Returns `NXDOMAIN` with the zone SOA in authority. |
+| Query is outside configured zones and recursion is enabled for the client IP | Uses recursive resolution. |
+| Query is outside configured zones and recursion is disabled or unauthorized | Returns `REFUSED`. |
+| Policy denies a query | Returns `REFUSED`. |
+
+## Policy Engine
+
+DNS query evaluation is governed by the policy engine across:
+
+- Authoritative zones
+- Cache hits
+- Recursive resolution
+
+Policy config:
+
+| Field | Meaning |
+| --- | --- |
+| `policy_file_path` | Optional path to policy JSON. |
+| `rule_engine.max_trace_facts` | Max facts included in explain trace logs. |
+| `rule_engine.enable_explain_logs` | Enables policy trace logging. |
+
+Behavior:
+
+- If `policy_file_path` is unset and `--allow-open-policy` is provided, DNS uses a built-in allow-all policy.
+- If `policy_file_path` is set and invalid at startup, DNS fails to start.
+- Invalid policy updates during live reload are rejected and the previous policy stays active.
+- Removing `policy_file_path` during live reload restores the built-in default policy only when open policy is allowed.
+
+Canonical policy spec:
+
+- `dns_rule_engine_policy_spec.json`
+
+## Live Reload
+
+- DNS watches the config file path passed at startup, or `config.json` by default.
+- When file content changes, it reparses and applies live-reloadable policy settings.
+- Invalid updates are rejected and the previous in-memory config/policy remain active.
+- Listener, transport, zone, resolver, cache, logging, health, recursion, and shutdown runtime changes require restart and are rejected during live reload.
+- Reload is strict parse/validate only; missing or malformed config never falls back to defaults.
+
+## Operations Runbook
+
+### Endpoints
+
+| Endpoint | Meaning |
+| --- | --- |
+| `GET /live` | Process is running. |
+| `GET /ready` | Process can receive traffic. Returns `503` while draining, when required cache is unhealthy, or when enabled audit logging cannot write. |
+| `GET /metrics` | Text metrics for readiness, drain state, active queries, cache health/errors, audit health/errors, policy denies, recursion denies, and reload results. |
+
+### Recommended Probes
+
+| Probe | Recommendation |
+| --- | --- |
+| Liveness | Use `/live` with a short timeout. Do not page on dependency failures from this probe. |
+| Readiness | Use `/ready`; remove the instance from rotation on any `503`. |
+| Metrics | Scrape `/metrics` and alert on `dns_ready 0`, `dns_cache_healthy 0` when `dns_cache_required 1`, `dns_audit_healthy 0`, rising `dns_audit_write_errors_total`, rising `dns_reload_failure_total`, and rising `dns_drain_timeout_total`. |
+
+### Startup Safety
+
+- Production startup requires an existing config file.
+- Production startup requires `policy_file_path` unless `--allow-open-policy` is explicitly set.
+- Recursive resolution is denied by default; enable it with explicit trusted client CIDRs.
+- The operational HTTP listener defaults to loopback.
+- `/ready` fails closed for required Redis cache outages, audit sink failures, and shutdown drain.
+- Audit logging gates readiness when enabled; startup probes the default tenant sink before accepting traffic.
+- For local/dev fallback behavior, run with `--allow-default-config`.
+
+### Redis Cache
+
+- Memory cache is local and does not gate readiness.
+- Redis cache can be optional or required with `caching.required`.
+- Required Redis is checked at startup and by a periodic background probe.
+- Readiness recovers after a successful bounded Redis probe.
+- Redis operation timeouts use `caching.timeout_ms`.
+- Repeated failures open cache health after `caching.failure_threshold`.
+- Incident checks: confirm Redis reachability, authentication, service DNS, latency, and whether `dns_cache_errors_total` is rising.
+
+### Audit Logs
+
+- `logging.log_dir` must be service-owned and not group/world writable.
+- Tenant directories and final log files must not be symlinks.
+- Enabled audit logging gates readiness through a startup write probe and later write results.
+- Disk incidents: check free space, inode exhaustion, mount state, file permissions, and retention settings.
+- Retention is configured through default and per-tenant retention days; size storage for peak query volume plus retention.
+
+### Shutdown And Rollout
+
+- On SIGTERM/SIGINT, readiness flips to `503`.
+- Active DNS queries drain until `shutdown.drain_timeout_seconds`.
+- If drain timeout expires, `dns_drain_timeout_total` increments and a warning is logged.
+- Canary a new config/image with `/ready` and `/metrics` before widening traffic.
+- Roll back by restoring the previous image/config and confirming `/ready` returns `200` and error counters stop increasing.
+
+## Project Status
+
+TitaniumGuard DNS is usable today for plain DNS, encrypted DNS transports,
+simple authoritative zones, guarded recursion, caching, policy enforcement, and
+production health checks. The biggest WIP areas are broader authoritative record
+coverage, full ODoH query handling, DNSCrypt, and authoritative DNSSEC signing.
