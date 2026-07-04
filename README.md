@@ -16,6 +16,7 @@ The project is open source under the Apache License, Version 2.0.
 - Provides memory or Redis-backed DNS response caching.
 - Emits audit logs with retention and tenant-aware logging policies.
 - Exposes `/live`, `/ready`, and `/metrics` for production operations.
+- Exposes a localhost MCP endpoint for LLM-safe DNS operations and resolution.
 - Reloads policy/config safely without accepting invalid runtime updates.
 
 ## DNS Transport Support
@@ -64,6 +65,7 @@ binaries are opt-in with `--no-default-features`.
 | `doh` | Yes | DNS over HTTPS over HTTP/2 and ODoH config publishing. |
 | `doq` | Yes | DNS over QUIC. |
 | `doh3` | Yes | DNS over HTTP/3. |
+| `mcp` | Yes | Localhost Model Context Protocol endpoint for DNS tools. |
 
 Example builds:
 
@@ -116,6 +118,12 @@ for development, demos, and tests.
   "caching": {
     "type": "memory",
     "max_entries": 100000
+  },
+  "mcp": {
+    "enabled": true,
+    "listen_addr": "127.0.0.1:8082",
+    "endpoint": "/mcp",
+    "resolve_client_ip": "127.0.0.1"
   },
   "recursion": {
     "enabled": true,
@@ -205,8 +213,41 @@ Canonical policy spec:
 - DNS watches the config file path passed at startup, or `config.json` by default.
 - When file content changes, it reparses and applies live-reloadable policy settings.
 - Invalid updates are rejected and the previous in-memory config/policy remain active.
-- Listener, transport, zone, resolver, cache, logging, health, recursion, and shutdown runtime changes require restart and are rejected during live reload.
+- Listener, transport, zone, resolver, cache, logging, health, MCP, recursion, and shutdown runtime changes require restart and are rejected during live reload.
 - Reload is strict parse/validate only; missing or malformed config never falls back to defaults.
+
+## MCP
+
+When built with default features, TitaniumGuard DNS starts an MCP Streamable HTTP
+endpoint on `127.0.0.1:8082/mcp`. The server uses the newest protocol version
+supported by the bundled Rust MCP SDK and keeps the listener loopback-only by
+default.
+
+MCP config:
+
+| Field | Meaning |
+| --- | --- |
+| `mcp.enabled` | Enables the MCP listener. Defaults to `true` with the `mcp` feature and `false` when compiled without it. |
+| `mcp.listen_addr` | MCP HTTP listener. Defaults to `127.0.0.1:8082` and must be loopback. |
+| `mcp.endpoint` | Streamable HTTP endpoint path. Defaults to `/mcp`. |
+| `mcp.allowed_hosts` | Host header allowlist for DNS rebinding protection. Defaults to localhost entries. |
+| `mcp.allowed_origins` | Optional browser Origin allowlist. Missing Origin still works for local clients. |
+| `mcp.resolve_client_ip` | Synthetic client IP used by the `resolve` tool. Defaults to `127.0.0.1`. |
+
+Tools:
+
+| Tool | Meaning |
+| --- | --- |
+| `status` | Readiness, drain state, health, and counters. |
+| `metrics` | Same text metrics exposed by `GET /metrics`. |
+| `config_summary` | Non-secret runtime config summary. |
+| `zones` | Configured authoritative zones, owners, and record types. |
+| `resolve` | Resolves `hostname` and optional `record_type` through the live DNS policy, authoritative, cache, and recursion path. |
+
+`resolve` supports `A`, `AAAA`, `TXT`, `SRV`, `NS`, and `SOA`. Recursive MCP
+resolution obeys the normal recursion allowlist using `mcp.resolve_client_ip`;
+include that IP in `recursion.allowed_client_cidrs` when MCP should resolve
+external names recursively.
 
 ## Operations Runbook
 
