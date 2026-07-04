@@ -4,6 +4,8 @@ mod forwarder;
 #[path = "livereload/lib.rs"]
 mod livereload;
 mod logging;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod ops;
 mod policy;
 mod secure;
@@ -25,6 +27,8 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::runtime::Builder;
 use tokio::sync::RwLock;
 use tokio::time::{interval, sleep, timeout};
+#[cfg(feature = "mcp")]
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 type DynResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -165,20 +169,52 @@ async fn async_main() -> DynResult<()> {
     runtime_state.update_audit_health(audit_healthy, forwarder.audit_write_error_count());
     let mut server = ServerFuture::new(forwarder.clone());
     let health_listener = ops::bind(config.health.listen_addr).await?;
+    #[cfg(feature = "mcp")]
+    let mcp_listener = if config.mcp.enabled {
+        Some(TcpListener::bind(config.mcp.listen_addr).await?)
+    } else {
+        None
+    };
+    #[cfg(feature = "mcp")]
+    let mcp_cancellation = CancellationToken::new();
     let udp_socket = UdpSocket::bind(config.listen_addr).await?;
     let tcp_listener = TcpListener::bind(config.listen_addr).await?;
     info!("listening on udp {}", config.listen_addr);
     info!("listening on tcp {}", config.listen_addr);
     server.register_socket(udp_socket);
     server.register_listener(tcp_listener, Duration::from_secs(10));
-    register_secure_transports(&mut server, &config, forwarder).await?;
+    register_secure_transports(&mut server, &config, forwarder.clone()).await?;
     runtime_state.mark_ready();
     tokio::spawn(ops::serve(health_listener, runtime_state.clone()));
+    #[cfg(feature = "mcp")]
+    if let Some(listener) = mcp_listener {
+        let forwarder = forwarder.clone();
+        let runtime_state = runtime_state.clone();
+        let runtime_config = runtime_config.clone();
+        let mcp_config = config.mcp.clone();
+        let cancellation = mcp_cancellation.child_token();
+        tokio::spawn(async move {
+            if let Err(err) = mcp::serve(
+                listener,
+                forwarder,
+                runtime_state,
+                runtime_config,
+                mcp_config,
+                cancellation,
+            )
+            .await
+            {
+                warn!(error = %err, "mcp server stopped");
+            }
+        });
+    }
 
     tokio::select! {
         result = server.block_until_done() => result?,
         _ = shutdown_signal() => {
             info!("shutdown signal received; draining dns");
+            #[cfg(feature = "mcp")]
+            mcp_cancellation.cancel();
             runtime_state.mark_draining();
             let drain = Duration::from_secs(config.shutdown.drain_timeout_seconds);
             if timeout(drain, wait_until_idle(runtime_state.clone())).await.is_err() {
@@ -308,6 +344,7 @@ fn restart_required(current: &AppConfig, next: &AppConfig) -> bool {
         || format!("{:?}", current.caching) != format!("{:?}", next.caching)
         || format!("{:?}", current.logging) != format!("{:?}", next.logging)
         || format!("{:?}", current.health) != format!("{:?}", next.health)
+        || format!("{:?}", current.mcp) != format!("{:?}", next.mcp)
         || format!("{:?}", current.recursion) != format!("{:?}", next.recursion)
         || format!("{:?}", current.shutdown) != format!("{:?}", next.shutdown)
 }

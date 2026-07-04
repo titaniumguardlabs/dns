@@ -18,6 +18,7 @@ use tracing::warn;
 pub const DEFAULT_CONFIG_PATH: &str = "config.json";
 pub const DEFAULT_LISTEN_PORT: u16 = 8080;
 pub const DEFAULT_HEALTH_LISTEN_PORT: u16 = 8081;
+pub const DEFAULT_MCP_LISTEN_PORT: u16 = 8082;
 pub const DEFAULT_MAX_DOH_H2_CONNECTIONS: u32 = 1024;
 pub const DEFAULT_MAX_DOH_H2_STREAMS_PER_CONNECTION: u32 = 100;
 pub const DEFAULT_MAX_DOH_BODY_BYTES: usize = 4096;
@@ -47,6 +48,8 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub health: HealthConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
     #[serde(default)]
     pub recursion: RecursionConfig,
     #[serde(default)]
@@ -96,6 +99,23 @@ pub struct ZoneRecordSetConfig {
 pub struct HealthConfig {
     #[serde(default = "default_health_listen_addr")]
     pub listen_addr: SocketAddr,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpConfig {
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_mcp_listen_addr")]
+    pub listen_addr: SocketAddr,
+    #[serde(default = "default_mcp_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_mcp_allowed_hosts")]
+    pub allowed_hosts: Vec<String>,
+    #[serde(default)]
+    pub allowed_origins: Vec<String>,
+    #[serde(default = "default_mcp_resolve_client_ip")]
+    pub resolve_client_ip: IpAddr,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -229,6 +249,23 @@ impl AppConfig {
                 "health.listen_addr must be loopback unless an authenticated ops listener is added"
                     .into(),
             );
+        }
+        if self.mcp.enabled {
+            #[cfg(not(feature = "mcp"))]
+            return Err("mcp.enabled=true requires the `mcp` feature".into());
+
+            if self.mcp.listen_addr.port() == 0 {
+                return Err("mcp.listen_addr port must be greater than zero".into());
+            }
+            if !self.mcp.listen_addr.ip().is_loopback() {
+                return Err(
+                    "mcp.listen_addr must be loopback unless an authenticated MCP listener is added"
+                        .into(),
+                );
+            }
+            if !self.mcp.endpoint.starts_with('/') {
+                return Err("mcp.endpoint must start with '/'".into());
+            }
         }
         if self.shutdown.drain_timeout_seconds == 0 {
             return Err("shutdown.drain_timeout_seconds must be greater than zero".into());
@@ -375,6 +412,7 @@ impl Default for AppConfig {
             caching: CachingConfig::default(),
             logging: LoggingConfig::default(),
             health: HealthConfig::default(),
+            mcp: McpConfig::default(),
             recursion: RecursionConfig::default(),
             shutdown: ShutdownConfig::default(),
         }
@@ -385,6 +423,19 @@ impl Default for HealthConfig {
     fn default() -> Self {
         Self {
             listen_addr: default_health_listen_addr(),
+        }
+    }
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mcp_enabled(),
+            listen_addr: default_mcp_listen_addr(),
+            endpoint: default_mcp_endpoint(),
+            allowed_hosts: default_mcp_allowed_hosts(),
+            allowed_origins: Vec::new(),
+            resolve_client_ip: default_mcp_resolve_client_ip(),
         }
     }
 }
@@ -408,6 +459,30 @@ impl Default for ShutdownConfig {
 
 fn default_health_listen_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], DEFAULT_HEALTH_LISTEN_PORT))
+}
+
+fn default_mcp_enabled() -> bool {
+    cfg!(feature = "mcp")
+}
+
+fn default_mcp_listen_addr() -> SocketAddr {
+    SocketAddr::from(([127, 0, 0, 1], DEFAULT_MCP_LISTEN_PORT))
+}
+
+fn default_mcp_endpoint() -> String {
+    "/mcp".to_string()
+}
+
+fn default_mcp_allowed_hosts() -> Vec<String> {
+    vec![
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+        "::1".to_string(),
+    ]
+}
+
+fn default_mcp_resolve_client_ip() -> IpAddr {
+    IpAddr::V4(Ipv4Addr::LOCALHOST)
 }
 
 fn default_shutdown_drain_timeout_seconds() -> u64 {

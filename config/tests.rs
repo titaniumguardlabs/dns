@@ -29,6 +29,7 @@ fn sample_config() -> AppConfig {
         caching: CachingConfig::default(),
         logging: LoggingConfig::default(),
         health: HealthConfig::default(),
+        mcp: McpConfig::default(),
         recursion: RecursionConfig::default(),
         shutdown: ShutdownConfig::default(),
     }
@@ -67,6 +68,7 @@ fn app_config_from_file_parses_config() {
     assert!(config.transports.dot.is_none());
     assert!(matches!(config.caching, CachingConfig::Memory { .. }));
     assert_eq!(config.logging.default_mode, LogMode::Strict);
+    assert_eq!(config.mcp.listen_addr.port(), DEFAULT_MCP_LISTEN_PORT);
 }
 
 #[test]
@@ -78,6 +80,7 @@ fn app_config_load_or_default_uses_default_when_file_missing() {
     assert!(config.resolvers.is_empty());
     assert!(config.zones.is_empty());
     assert!(config.transports.doh.is_none());
+    assert_eq!(config.mcp.endpoint, "/mcp");
     assert!(matches!(config.caching, CachingConfig::Memory { .. }));
     assert_eq!(config.root_hints().len(), 26);
 }
@@ -99,6 +102,14 @@ fn app_config_default_uses_root_server_hints() {
     assert!(config.resolvers.is_empty());
     assert!(config.zones.is_empty());
     assert!(matches!(config.caching, CachingConfig::Memory { .. }));
+    assert_eq!(
+        config.mcp.listen_addr,
+        SocketAddr::from(([127, 0, 0, 1], DEFAULT_MCP_LISTEN_PORT))
+    );
+    assert_eq!(
+        config.mcp.allowed_hosts,
+        vec!["localhost", "127.0.0.1", "::1"]
+    );
     assert_eq!(config.root_hints().len(), 26);
     assert!(
         config
@@ -454,6 +465,55 @@ fn validate_rejects_non_loopback_health_listener() {
 
     let err = config.validate(false).expect_err("validation should fail");
     assert!(err.to_string().contains("health.listen_addr"));
+}
+
+#[test]
+#[cfg(feature = "mcp")]
+fn validate_accepts_default_mcp_listener() {
+    let config = AppConfig::default();
+
+    let result = config.validate(false);
+    assert!(result.is_ok(), "unexpected error: {result:?}");
+}
+
+#[test]
+#[cfg(feature = "mcp")]
+fn validate_rejects_mcp_zero_port() {
+    let mut config = AppConfig::default();
+    config.mcp.listen_addr = "127.0.0.1:0".parse().expect("addr");
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("mcp.listen_addr port"));
+}
+
+#[test]
+#[cfg(feature = "mcp")]
+fn validate_rejects_non_loopback_mcp_listener() {
+    let mut config = AppConfig::default();
+    config.mcp.listen_addr = "0.0.0.0:8082".parse().expect("addr");
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("mcp.listen_addr"));
+}
+
+#[test]
+#[cfg(feature = "mcp")]
+fn validate_rejects_mcp_endpoint_without_slash() {
+    let mut config = AppConfig::default();
+    config.mcp.endpoint = "mcp".to_string();
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("mcp.endpoint"));
+}
+
+#[test]
+#[cfg(not(feature = "mcp"))]
+fn validate_rejects_mcp_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.mcp.enabled = true;
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("mcp"));
 }
 
 #[test]

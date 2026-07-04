@@ -6,6 +6,28 @@ pub struct RuntimeState {
     inner: Arc<RuntimeInner>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeSnapshot {
+    pub ready: bool,
+    pub draining: bool,
+    pub active_queries: u64,
+    pub queries_total: u64,
+    pub policy_denies: u64,
+    pub recursion_denies: u64,
+    pub cache_hits: u64,
+    pub cache_misses: u64,
+    pub audit_write_errors: u64,
+    pub reload_successes: u64,
+    pub reload_failures: u64,
+    pub reload_requires_restart: u64,
+    pub drain_timeouts: u64,
+    pub cache_required: bool,
+    pub cache_healthy: bool,
+    pub cache_errors: u64,
+    pub audit_healthy: bool,
+    pub audit_errors: u64,
+}
+
 struct RuntimeInner {
     ready: AtomicBool,
     draining: AtomicBool,
@@ -161,6 +183,29 @@ impl RuntimeState {
             u8::from(self.inner.audit_healthy.load(Ordering::Relaxed)),
             self.inner.audit_errors.load(Ordering::Relaxed),
         )
+    }
+
+    pub fn snapshot(&self) -> RuntimeSnapshot {
+        RuntimeSnapshot {
+            ready: self.inner.ready.load(Ordering::Relaxed),
+            draining: self.inner.draining.load(Ordering::Relaxed),
+            active_queries: self.inner.active_queries.load(Ordering::Relaxed),
+            queries_total: self.inner.queries_total.load(Ordering::Relaxed),
+            policy_denies: self.inner.policy_denies.load(Ordering::Relaxed),
+            recursion_denies: self.inner.recursion_denies.load(Ordering::Relaxed),
+            cache_hits: self.inner.cache_hits.load(Ordering::Relaxed),
+            cache_misses: self.inner.cache_misses.load(Ordering::Relaxed),
+            audit_write_errors: self.inner.audit_write_errors.load(Ordering::Relaxed),
+            reload_successes: self.inner.reload_successes.load(Ordering::Relaxed),
+            reload_failures: self.inner.reload_failures.load(Ordering::Relaxed),
+            reload_requires_restart: self.inner.reload_requires_restart.load(Ordering::Relaxed),
+            drain_timeouts: self.inner.drain_timeouts.load(Ordering::Relaxed),
+            cache_required: self.inner.cache_required.load(Ordering::Relaxed),
+            cache_healthy: self.inner.cache_healthy.load(Ordering::Relaxed),
+            cache_errors: self.inner.cache_errors.load(Ordering::Relaxed),
+            audit_healthy: self.inner.audit_healthy.load(Ordering::Relaxed),
+            audit_errors: self.inner.audit_errors.load(Ordering::Relaxed),
+        }
     }
 }
 
