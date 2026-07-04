@@ -1,3 +1,4 @@
+use prometheus::{Encoder, IntCounter, IntGauge, Opts, Registry, TextEncoder};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -143,46 +144,120 @@ impl RuntimeState {
     }
 
     pub fn metrics(&self) -> String {
-        format!(
-            concat!(
-                "dns_ready {}\n",
-                "dns_draining {}\n",
-                "dns_active_queries {}\n",
-                "dns_queries_total {}\n",
-                "dns_policy_denied_total {}\n",
-                "dns_recursion_denied_total {}\n",
-                "dns_cache_hits_total {}\n",
-                "dns_cache_misses_total {}\n",
-                "dns_audit_write_errors_total {}\n",
-                "dns_reload_success_total {}\n",
-                "dns_reload_failure_total {}\n",
-                "dns_reload_requires_restart_total {}\n",
-                "dns_drain_timeout_total {}\n",
-                "dns_cache_required {}\n",
-                "dns_cache_healthy {}\n",
-                "dns_cache_errors_total {}\n",
-                "dns_audit_healthy {}\n",
-                "dns_audit_errors_total {}\n"
-            ),
-            u8::from(self.inner.ready.load(Ordering::Relaxed)),
-            u8::from(self.inner.draining.load(Ordering::Relaxed)),
-            self.inner.active_queries.load(Ordering::Relaxed),
-            self.inner.queries_total.load(Ordering::Relaxed),
-            self.inner.policy_denies.load(Ordering::Relaxed),
-            self.inner.recursion_denies.load(Ordering::Relaxed),
-            self.inner.cache_hits.load(Ordering::Relaxed),
-            self.inner.cache_misses.load(Ordering::Relaxed),
-            self.inner.audit_write_errors.load(Ordering::Relaxed),
-            self.inner.reload_successes.load(Ordering::Relaxed),
-            self.inner.reload_failures.load(Ordering::Relaxed),
-            self.inner.reload_requires_restart.load(Ordering::Relaxed),
-            self.inner.drain_timeouts.load(Ordering::Relaxed),
-            u8::from(self.inner.cache_required.load(Ordering::Relaxed)),
-            u8::from(self.inner.cache_healthy.load(Ordering::Relaxed)),
-            self.inner.cache_errors.load(Ordering::Relaxed),
-            u8::from(self.inner.audit_healthy.load(Ordering::Relaxed)),
-            self.inner.audit_errors.load(Ordering::Relaxed),
-        )
+        let snapshot = self.snapshot();
+        let registry = Registry::new_custom(Some("dns".to_string()), None)
+            .expect("valid prometheus registry prefix");
+
+        register_gauge(&registry, "ready", "DNS server has completed startup.", snapshot.ready);
+        register_gauge(
+            &registry,
+            "draining",
+            "DNS server is draining before shutdown.",
+            snapshot.draining,
+        );
+        register_u64_gauge(
+            &registry,
+            "active_queries",
+            "DNS queries currently being handled.",
+            snapshot.active_queries,
+        );
+        register_counter(
+            &registry,
+            "queries_total",
+            "DNS queries handled by the server.",
+            snapshot.queries_total,
+        );
+        register_counter(
+            &registry,
+            "policy_denials_total",
+            "DNS queries denied by policy.",
+            snapshot.policy_denies,
+        );
+        register_counter(
+            &registry,
+            "recursion_denials_total",
+            "DNS queries denied because recursion was unavailable or unauthorized.",
+            snapshot.recursion_denies,
+        );
+        register_counter(
+            &registry,
+            "cache_hits_total",
+            "DNS cache hits.",
+            snapshot.cache_hits,
+        );
+        register_counter(
+            &registry,
+            "cache_misses_total",
+            "DNS cache misses.",
+            snapshot.cache_misses,
+        );
+        register_counter(
+            &registry,
+            "audit_write_errors_total",
+            "Audit log write errors.",
+            snapshot.audit_write_errors,
+        );
+        register_counter(
+            &registry,
+            "reload_successes_total",
+            "Successful runtime reloads.",
+            snapshot.reload_successes,
+        );
+        register_counter(
+            &registry,
+            "reload_failures_total",
+            "Failed runtime reloads.",
+            snapshot.reload_failures,
+        );
+        register_counter(
+            &registry,
+            "reloads_requiring_restart_total",
+            "Runtime reloads rejected because a restart is required.",
+            snapshot.reload_requires_restart,
+        );
+        register_counter(
+            &registry,
+            "drain_timeouts_total",
+            "Shutdown drains that exceeded the configured timeout.",
+            snapshot.drain_timeouts,
+        );
+        register_gauge(
+            &registry,
+            "cache_required",
+            "Configured cache backend gates readiness.",
+            snapshot.cache_required,
+        );
+        register_gauge(
+            &registry,
+            "cache_healthy",
+            "Configured cache backend is currently healthy.",
+            snapshot.cache_healthy,
+        );
+        register_counter(
+            &registry,
+            "cache_errors_total",
+            "Cache backend errors.",
+            snapshot.cache_errors,
+        );
+        register_gauge(
+            &registry,
+            "audit_healthy",
+            "Audit logging sink is currently healthy.",
+            snapshot.audit_healthy,
+        );
+        register_counter(
+            &registry,
+            "audit_errors_total",
+            "Audit logging errors.",
+            snapshot.audit_errors,
+        );
+
+        let encoder = TextEncoder::new();
+        let mut encoded = Vec::new();
+        encoder
+            .encode(&registry.gather(), &mut encoded)
+            .expect("prometheus text encoding should succeed");
+        String::from_utf8(encoded).expect("prometheus text encoding should be utf8")
     }
 
     pub fn snapshot(&self) -> RuntimeSnapshot {
@@ -207,6 +282,30 @@ impl RuntimeState {
             audit_errors: self.inner.audit_errors.load(Ordering::Relaxed),
         }
     }
+}
+
+fn register_gauge(registry: &Registry, name: &str, help: &str, value: bool) {
+    let gauge = IntGauge::with_opts(Opts::new(name, help)).expect("valid prometheus gauge");
+    gauge.set(i64::from(value));
+    registry
+        .register(Box::new(gauge))
+        .expect("unique prometheus gauge name");
+}
+
+fn register_u64_gauge(registry: &Registry, name: &str, help: &str, value: u64) {
+    let gauge = IntGauge::with_opts(Opts::new(name, help)).expect("valid prometheus gauge");
+    gauge.set(value.try_into().unwrap_or(i64::MAX));
+    registry
+        .register(Box::new(gauge))
+        .expect("unique prometheus gauge name");
+}
+
+fn register_counter(registry: &Registry, name: &str, help: &str, value: u64) {
+    let counter = IntCounter::with_opts(Opts::new(name, help)).expect("valid prometheus counter");
+    counter.inc_by(value);
+    registry
+        .register(Box::new(counter))
+        .expect("unique prometheus counter name");
 }
 
 impl Default for RuntimeInner {
