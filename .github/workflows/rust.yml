@@ -63,6 +63,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+      - name: Install cross tool
+        run: cargo install cross --git https://github.com/cross-rs/cross
       - name: Build debug
         if: github.event_name == 'pull_request'
         run: cross build --target "${{ matrix.target }}"
