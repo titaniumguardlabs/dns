@@ -3,7 +3,7 @@
 ## Project Shape
 
 TitaniumGuard DNS is a single-binary Rust DNS server. The binary target is
-`titaniumguard-dns` and its entrypoint is `main.rs`.
+`titaniumguard-dns` and its entrypoint is `src/main.rs`.
 
 Core behavior:
 
@@ -23,21 +23,21 @@ Core behavior:
 
 ## Important Modules
 
-- `main.rs`: startup, listener registration, live reload, shutdown drain, and
+- `src/main.rs`: startup, listener registration, live reload, shutdown drain, and
   feature-gated transport/MCP wiring.
-- `config/`: configuration schema, defaults, validation, HPKE helpers, and
+- `src/config/`: configuration schema, defaults, validation, HPKE helpers, and
   config tests.
-- `forwarder/`: DNS request handling, authoritative zone behavior, recursion,
+- `src/forwarder/`: DNS request handling, authoritative zone behavior, recursion,
   cache integration, and runtime state/metrics.
-- `policy/`: policy parsing, facts, evaluation, compile helpers, and explain
+- `src/policy/`: policy parsing, facts, evaluation, compile helpers, and explain
   traces.
-- `logging/`: audit logging, tenant policy, retention, hashing, EDNS logging,
+- `src/logging/`: audit logging, tenant policy, retention, hashing, EDNS logging,
   and health checks.
-- `caching/`: memory and Redis cache backends.
-- `secure.rs`: encrypted DNS transport support.
-- `mcp.rs`: MCP tools for status, metrics, config summary, zones, and controlled
+- `src/caching/`: memory and Redis cache backends.
+- `src/secure.rs`: encrypted DNS transport support.
+- `src/mcp.rs`: MCP tools for status, metrics, config summary, zones, and controlled
   DNS resolution through the live DNS path.
-- `ops.rs`: HTTP operational endpoints.
+- `src/ops.rs`: HTTP operational endpoints.
 - `dns_rule_engine_policy_spec.json`: canonical policy spec.
 
 ## Cargo Features

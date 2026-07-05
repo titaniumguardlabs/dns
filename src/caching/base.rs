@@ -1,11 +1,11 @@
+use crate::dns::DnsRecord;
 use async_trait::async_trait;
-use hickory_server::proto::rr::Record;
 use std::{sync::Arc, time::Duration};
 
 #[async_trait]
 pub trait DnsRecordCache: Send + Sync {
-    async fn get(&self, key: &str) -> Option<Arc<Vec<Record>>>;
-    async fn insert(&self, key: String, records: Vec<Record>);
+    async fn get(&self, key: &str) -> Option<Arc<Vec<DnsRecord>>>;
+    async fn insert(&self, key: String, records: Vec<DnsRecord>);
     async fn check_health(&self) -> bool {
         self.is_healthy()
     }
@@ -20,10 +20,10 @@ pub trait DnsRecordCache: Send + Sync {
     }
 }
 
-pub fn minimum_ttl(records: &[Record]) -> Option<Duration> {
+pub fn minimum_ttl(records: &[DnsRecord]) -> Option<Duration> {
     records
         .iter()
-        .map(|record| record.ttl())
+        .map(|record| record.ttl)
         .min()
         .map(u64::from)
         .map(Duration::from_secs)

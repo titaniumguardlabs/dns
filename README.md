@@ -27,8 +27,8 @@ The project is open source under the Apache License, Version 2.0.
 | DNS over TCP | Supported | `listen_addr` | Enabled by the main listener. |
 | DNS over TLS (DoT) | Supported | `transports.dot` | Requires certificate and private key paths. |
 | DNS over HTTPS (DoH, HTTP/2) | Supported | `transports.doh` | Uses HTTP/2 and a configurable endpoint, default `/dns-query`. |
-| DNS over QUIC (DoQ) | Supported | `transports.doq` | Requires certificate and private key paths. |
-| DNS over HTTP/3 (DoH3) | Supported | `transports.doh3` | Requires certificate and private key paths. |
+| DNS over QUIC (DoQ) | Supported | `transports.doq` | Uses a dedicated QUIC listener with ALPN `doq`. |
+| DNS over HTTP/3 (DoH3) | Supported | `transports.doh3` | Uses a dedicated HTTP/3 listener with ALPN `h3`. |
 | Oblivious DoH (ODoH) | WIP | `transports.doh.odoh` | Publishes `/.well-known/odohconfigs`; encrypted ODoH query handling is not complete yet. |
 | DNSCrypt | WIP | None | Not implemented. |
 
@@ -58,7 +58,7 @@ binaries are opt-in with `--no-default-features`.
 
 | Feature | Included by default | Enables |
 | --- | --- | --- |
-| `recursion` | Yes | Recursive resolution and DNSSEC validation through Hickory Recursor. |
+| `recursion` | Yes | Recursive upstream forwarding through the in-repo DNS wire implementation. |
 | `redis-cache` | Yes | Redis-backed DNS response cache. |
 | `audit-logging` | Yes | Tenant-aware audit logs, HMAC hashing, retention, and readiness checks. |
 | `dot` | Yes | DNS over TLS. |
@@ -85,7 +85,8 @@ cargo build --release --no-default-features --features recursion,redis-cache
 
 If a config file uses a capability that was compiled out, startup fails with a
 clear validation error. For example, `caching.type = "redis"` requires
-`redis-cache`, and `transports.doh` requires `doh`.
+`redis-cache`, `transports.doh` requires `doh`, `transports.doq` requires
+`doq`, and `transports.doh3` requires `doh3`.
 
 ## Quick Start
 
@@ -305,7 +306,8 @@ external names recursively.
 
 ## Project Status
 
-TitaniumGuard DNS is usable today for plain DNS, encrypted DNS transports,
-simple authoritative zones, guarded recursion, caching, policy enforcement, and
-production health checks. The biggest WIP areas are broader authoritative record
-coverage, full ODoH query handling, DNSCrypt, and authoritative DNSSEC signing.
+TitaniumGuard DNS is usable today for plain DNS, DoT, DoH, DoQ, DoH3, simple
+authoritative zones, guarded recursion, caching, policy enforcement, and
+production health checks. The biggest WIP areas are broader authoritative
+record coverage, full ODoH query handling, DNSCrypt, and authoritative DNSSEC
+signing.

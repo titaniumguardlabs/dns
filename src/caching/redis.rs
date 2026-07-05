@@ -1,9 +1,6 @@
 use crate::caching::base::{DnsRecordCache, minimum_ttl};
+use crate::dns::DnsRecord;
 use async_trait::async_trait;
-use hickory_server::proto::rr::Record;
-use hickory_server::proto::serialize::binary::{
-    BinDecodable, BinDecoder, BinEncodable, BinEncoder,
-};
 use redis::AsyncCommands;
 use std::io;
 use std::sync::Arc;
@@ -92,14 +89,10 @@ impl RedisDnsRecordCache {
         }
     }
 
-    fn encode_records(records: &[Record]) -> CacheResult<Vec<u8>> {
+    fn encode_records(records: &[DnsRecord]) -> CacheResult<Vec<u8>> {
         let mut out = Vec::new();
         for record in records {
-            let mut encoded_record = Vec::new();
-            {
-                let mut encoder = BinEncoder::new(&mut encoded_record);
-                record.emit(&mut encoder)?;
-            }
+            let encoded_record = record.to_wire()?;
             let len = u32::try_from(encoded_record.len())
                 .map_err(|_| io::Error::other("record encoding too large"))?;
             out.extend_from_slice(&len.to_be_bytes());
@@ -108,7 +101,7 @@ impl RedisDnsRecordCache {
         Ok(out)
     }
 
-    fn decode_records(blob: &[u8]) -> CacheResult<Vec<Record>> {
+    fn decode_records(blob: &[u8]) -> CacheResult<Vec<DnsRecord>> {
         let mut records = Vec::new();
         let mut cursor = 0usize;
 
@@ -132,8 +125,7 @@ impl RedisDnsRecordCache {
             let encoded_record = &blob[cursor..cursor + len];
             cursor += len;
 
-            let mut decoder = BinDecoder::new(encoded_record);
-            records.push(Record::read(&mut decoder)?);
+            records.push(DnsRecord::from_wire(encoded_record)?);
         }
 
         Ok(records)
@@ -142,7 +134,7 @@ impl RedisDnsRecordCache {
 
 #[async_trait]
 impl DnsRecordCache for RedisDnsRecordCache {
-    async fn get(&self, key: &str) -> Option<Arc<Vec<Record>>> {
+    async fn get(&self, key: &str) -> Option<Arc<Vec<DnsRecord>>> {
         let mut conn = self.with_connection().await?;
         let redis_key = self.namespaced_key(key);
         let blob: Option<Vec<u8>> = match timeout(self.timeout, conn.get(&redis_key)).await {
@@ -173,7 +165,7 @@ impl DnsRecordCache for RedisDnsRecordCache {
         }
     }
 
-    async fn insert(&self, key: String, records: Vec<Record>) {
+    async fn insert(&self, key: String, records: Vec<DnsRecord>) {
         let ttl = match minimum_ttl(&records) {
             Some(ttl) if !ttl.is_zero() => ttl.as_secs().max(1),
             _ => return,

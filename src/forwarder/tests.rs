@@ -2,50 +2,27 @@ use super::Forwarder;
 use crate::caching::MokaDnsRecordCache;
 #[cfg(feature = "recursion")]
 use crate::config::RecursionConfig;
-use crate::config::{ZoneConfig, ZoneSoaConfig};
+use crate::config::{ZoneConfig, ZoneRecordSetConfig, ZoneSoaConfig};
+use crate::dns::{
+    DnsClass, DnsMessage, DnsName, DnsQuestion, DnsRequest, RecordType, ResponseCode,
+    TransportProtocol,
+};
+#[cfg(feature = "recursion")]
+use crate::dns::{DnsRecord, RData};
 use crate::logging::{LoggingConfig, LoggingPipeline};
 use crate::policy::{PolicyRuntime, RuleEngineConfig};
-use hickory_server::authority::{MessageRequest, MessageResponse};
-use hickory_server::proto::op::Edns;
-use hickory_server::proto::op::{Message, Query, ResponseCode};
-use hickory_server::proto::rr::{Name, Record, RecordType};
-use hickory_server::proto::serialize::binary::{
-    BinDecodable, BinDecoder, BinEncodable, BinEncoder,
-};
-use hickory_server::proto::xfer::Protocol;
-use hickory_server::server::{Request, RequestHandler, ResponseHandler, ResponseInfo};
 use std::collections::BTreeMap;
-use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::IpAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Default)]
-struct TestResponseHandler;
-
-#[async_trait::async_trait]
-impl ResponseHandler for TestResponseHandler {
-    async fn send_response<'a>(
-        &mut self,
-        response: MessageResponse<
-            '_,
-            'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-            impl Iterator<Item = &'a Record> + Send + 'a,
-        >,
-    ) -> io::Result<ResponseInfo> {
-        let mut bytes = Vec::with_capacity(512);
-        let info = {
-            let mut encoder = BinEncoder::new(&mut bytes);
-            response
-                .destructive_emit(&mut encoder)
-                .map_err(|err| io::Error::other(format!("failed to encode response: {err}")))?
-        };
-        Ok(info)
-    }
+async fn async_test_policy_runtime() -> Arc<PolicyRuntime> {
+    Arc::new(
+        PolicyRuntime::from_file_or_default(None, RuleEngineConfig::default())
+            .await
+            .expect("policy runtime"),
+    )
 }
 
 fn test_policy_runtime() -> Arc<PolicyRuntime> {
@@ -60,14 +37,6 @@ fn test_policy_runtime() -> Arc<PolicyRuntime> {
     )
 }
 
-async fn async_test_policy_runtime() -> Arc<PolicyRuntime> {
-    Arc::new(
-        PolicyRuntime::from_file_or_default(None, RuleEngineConfig::default())
-            .await
-            .expect("policy runtime"),
-    )
-}
-
 fn write_temp_policy(contents: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -78,28 +47,49 @@ fn write_temp_policy(contents: &str) -> PathBuf {
     path
 }
 
-fn request_from_wire(name: &str, record_type: RecordType) -> Request {
-    let mut message = Message::new();
-    message
-        .add_query(Query::query(
-            Name::from_ascii(name).expect("valid name"),
+fn wire_request(name: &str, record_type: RecordType) -> DnsRequest {
+    let mut message = DnsMessage::query(
+        0,
+        DnsQuestion {
+            name: DnsName::parse_ascii(name).expect("valid name"),
             record_type,
-        ))
-        .set_recursion_desired(true);
-
-    let mut encoded = Vec::new();
-    {
-        let mut encoder = BinEncoder::new(&mut encoded);
-        message.emit(&mut encoder).expect("encode dns message");
+            class: DnsClass::IN,
+        },
+    );
+    message.header.recursion_desired = true;
+    DnsRequest {
+        client_ip: IpAddr::from([127, 0, 0, 1]),
+        protocol: TransportProtocol::Udp,
+        message,
     }
+}
 
-    let mut decoder = BinDecoder::new(&encoded);
-    let request = MessageRequest::read(&mut decoder).expect("decode dns request");
-    Request::new(
-        request,
-        SocketAddr::from((Ipv4Addr::new(127, 0, 0, 1), 55321)),
-        Protocol::Udp,
-    )
+fn single_a_zone() -> ZoneConfig {
+    let mut api_records = BTreeMap::new();
+    api_records.insert(
+        "A".to_string(),
+        ZoneRecordSetConfig {
+            ttl: 300,
+            values: vec!["192.0.2.10".to_string()],
+        },
+    );
+    let mut records = BTreeMap::new();
+    records.insert("api".to_string(), api_records);
+
+    ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records,
+    }
 }
 
 #[test]
@@ -118,39 +108,13 @@ fn forwarder_new_rejects_empty_resolvers() {
 }
 
 #[test]
-fn response_edns_is_sane_and_preserves_dnssec_and_options() {
-    let mut request_edns = Edns::new();
-    request_edns
-        .set_version(0)
-        .set_max_payload(4096)
-        .set_dnssec_ok(true);
-
-    let response_edns = Forwarder::response_edns_from_request(&request_edns);
-
-    assert_eq!(response_edns.max_payload(), 1232);
-    assert!(response_edns.flags().dnssec_ok);
-    assert_eq!(response_edns.version(), 0);
-}
-
-#[test]
-#[cfg(feature = "recursion")]
-fn minimized_zone_chain_walks_suffixes() {
-    let name = Name::from_ascii("www.example.com.").expect("valid fqdn");
-    let chain = Forwarder::minimized_zone_chain(&name);
-
-    assert_eq!(chain.len(), 2);
-    assert_eq!(chain[0].to_ascii(), "com.");
-    assert_eq!(chain[1].to_ascii(), "example.com.");
-}
-
-#[test]
 #[cfg(feature = "recursion")]
 fn cache_key_canonicalizes_query_name_case() {
-    let lower = request_from_wire("www.example.com.", RecordType::A);
-    let mixed = request_from_wire("WWW.Example.COM.", RecordType::A);
+    let lower = wire_request("www.example.com.", RecordType::A);
+    let mixed = wire_request("WWW.Example.COM.", RecordType::A);
 
-    let lower_key = Forwarder::cache_key(&lower, false).expect("cache key");
-    let mixed_key = Forwarder::cache_key(&mixed, false).expect("cache key");
+    let lower_key = Forwarder::cache_key(&lower).expect("cache key");
+    let mixed_key = Forwarder::cache_key(&mixed).expect("cache key");
 
     assert_eq!(lower_key, mixed_key);
 }
@@ -158,10 +122,17 @@ fn cache_key_canonicalizes_query_name_case() {
 #[test]
 #[cfg(feature = "recursion")]
 fn cache_key_separates_dnssec_ok() {
-    let request = request_from_wire("www.example.com.", RecordType::A);
+    let plain_request = wire_request("www.example.com.", RecordType::A);
+    let mut dnssec_request = wire_request("www.example.com.", RecordType::A);
+    dnssec_request.message.additionals.push(DnsRecord {
+        name: DnsName::root(),
+        ttl: 0x0000_8000,
+        class: DnsClass::Unknown(1232),
+        data: RData::OPT(Vec::new()),
+    });
 
-    let plain_key = Forwarder::cache_key(&request, false).expect("cache key");
-    let dnssec_key = Forwarder::cache_key(&request, true).expect("cache key");
+    let plain_key = Forwarder::cache_key(&plain_request).expect("cache key");
+    let dnssec_key = Forwarder::cache_key(&dnssec_request).expect("cache key");
 
     assert_ne!(plain_key, dnssec_key);
 }
@@ -209,7 +180,7 @@ fn authoritative_zone_matching_prefers_longest_owned_suffix() {
     )
     .expect("forwarder should build");
 
-    let name = Name::from_ascii("api.corp.internal.").expect("valid fqdn");
+    let name = DnsName::parse_ascii("api.corp.internal.").expect("valid fqdn");
     let zone = forwarder
         .authoritative_zones
         .find_zone(&name)
@@ -218,7 +189,7 @@ fn authoritative_zone_matching_prefers_longest_owned_suffix() {
 }
 
 #[tokio::test]
-async fn deny_rule_returns_refused() {
+async fn repo_dns_request_deny_rule_returns_refused() {
     let policy_path = write_temp_policy(
         r#"{
   "version":"1.0.0",
@@ -249,17 +220,40 @@ async fn deny_rule_returns_refused() {
     )
     .expect("forwarder should build");
 
-    let request = request_from_wire("blocked.example.", RecordType::A);
     let response = forwarder
-        .handle_request(&request, TestResponseHandler)
+        .handle_dns_request(wire_request("blocked.example.", RecordType::A))
         .await;
     let _ = std::fs::remove_file(policy_path);
 
-    assert_eq!(response.response_code(), ResponseCode::Refused);
+    assert_eq!(response.header.response_code, ResponseCode::Refused);
 }
 
 #[tokio::test]
-async fn recursion_is_denied_by_default() {
+async fn repo_dns_request_returns_authoritative_answer() {
+    let logger = Arc::new(LoggingPipeline::from_config(&LoggingConfig::default()));
+    let forwarder = Forwarder::with_cache(
+        &[IpAddr::from([198, 41, 0, 4])],
+        &[single_a_zone()],
+        Arc::new(MokaDnsRecordCache::new(100_000)),
+        logger,
+        async_test_policy_runtime().await,
+        Default::default(),
+    )
+    .expect("forwarder should build");
+
+    let response = forwarder
+        .handle_dns_request(wire_request("api.corp.internal.", RecordType::A))
+        .await;
+
+    assert_eq!(response.header.response_code, ResponseCode::NoError);
+    assert!(response.header.authoritative);
+    assert_eq!(response.answers.len(), 1);
+    assert_eq!(response.answers[0].name.to_ascii(), "api.corp.internal.");
+    assert_eq!(response.answers[0].record_type(), RecordType::A);
+}
+
+#[tokio::test]
+async fn repo_dns_request_denies_recursion_by_default() {
     let logger = Arc::new(LoggingPipeline::from_config(&LoggingConfig::default()));
     let forwarder = Forwarder::with_cache(
         &[IpAddr::from([198, 41, 0, 4])],
@@ -271,12 +265,11 @@ async fn recursion_is_denied_by_default() {
     )
     .expect("forwarder should build");
 
-    let request = request_from_wire("www.example.com.", RecordType::A);
     let response = forwarder
-        .handle_request(&request, TestResponseHandler)
+        .handle_dns_request(wire_request("www.example.com.", RecordType::A))
         .await;
 
-    assert_eq!(response.response_code(), ResponseCode::Refused);
+    assert_eq!(response.header.response_code, ResponseCode::Refused);
 }
 
 #[test]

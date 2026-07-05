@@ -1,5 +1,6 @@
 mod caching;
 mod config;
+mod dns;
 mod forwarder;
 #[path = "livereload/lib.rs"]
 mod livereload;
@@ -9,23 +10,25 @@ mod mcp;
 mod ops;
 mod policy;
 mod secure;
+mod server;
 
 use caching::DnsRecordCache;
 use caching::build_dns_record_cache;
 use config::{AppConfig, DEFAULT_CONFIG_PATH};
 use forwarder::{Forwarder, RuntimeState};
-use hickory_server::ServerFuture;
 use livereload::watch_file;
 use logging::LoggingPipeline;
 use policy::PolicyRuntime;
 use secure::register_secure_transports;
 use std::env;
+use std::future;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, UdpSocket};
 use tokio::runtime::Builder;
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 use tokio::time::{interval, sleep, timeout};
 #[cfg(feature = "mcp")]
 use tokio_util::sync::CancellationToken;
@@ -167,7 +170,6 @@ async fn async_main() -> DynResult<()> {
         }
     };
     runtime_state.update_audit_health(audit_healthy, forwarder.audit_write_error_count());
-    let mut server = ServerFuture::new(forwarder.clone());
     let health_listener = ops::bind(config.health.listen_addr).await?;
     #[cfg(feature = "mcp")]
     let mcp_listener = if config.mcp.enabled {
@@ -181,9 +183,14 @@ async fn async_main() -> DynResult<()> {
     let tcp_listener = TcpListener::bind(config.listen_addr).await?;
     info!("listening on udp {}", config.listen_addr);
     info!("listening on tcp {}", config.listen_addr);
-    server.register_socket(udp_socket);
-    server.register_listener(tcp_listener, Duration::from_secs(10));
-    register_secure_transports(&mut server, &config, forwarder.clone()).await?;
+    let udp_task = tokio::spawn(server::serve_udp(udp_socket, forwarder.clone()));
+    let tcp_task = tokio::spawn(server::serve_tcp(
+        tcp_listener,
+        forwarder.clone(),
+        Duration::from_secs(10),
+    ));
+    register_secure_transports(&config, forwarder.clone()).await?;
+    let secure_task = None;
     runtime_state.mark_ready();
     tokio::spawn(ops::serve(health_listener, runtime_state.clone()));
     #[cfg(feature = "mcp")]
@@ -210,7 +217,9 @@ async fn async_main() -> DynResult<()> {
     }
 
     tokio::select! {
-        result = server.block_until_done() => result?,
+        result = udp_task => join_server_task("udp dns", result)?,
+        result = tcp_task => join_server_task("tcp dns", result)?,
+        result = wait_optional_server_task("secure dns", secure_task) => result?,
         _ = shutdown_signal() => {
             info!("shutdown signal received; draining dns");
             #[cfg(feature = "mcp")]
@@ -227,6 +236,26 @@ async fn async_main() -> DynResult<()> {
         }
     }
     Ok(())
+}
+
+async fn wait_optional_server_task(
+    name: &'static str,
+    task: Option<JoinHandle<io::Result<()>>>,
+) -> io::Result<()> {
+    match task {
+        Some(task) => join_server_task(name, task.await),
+        None => future::pending().await,
+    }
+}
+
+fn join_server_task(
+    name: &'static str,
+    result: Result<io::Result<()>, tokio::task::JoinError>,
+) -> io::Result<()> {
+    match result {
+        Ok(result) => result,
+        Err(err) => Err(io::Error::other(format!("{name} task failed: {err}"))),
+    }
 }
 
 fn spawn_required_cache_health_probe(cache: Arc<dyn DnsRecordCache>, runtime_state: RuntimeState) {

@@ -2,23 +2,20 @@
 use crate::caching::DnsRecordCache;
 use crate::logging::LoggingPipeline;
 use crate::policy::PolicyRuntime;
-use async_trait::async_trait;
-#[cfg(feature = "recursion")]
-use hickory_recursor::Recursor;
-use hickory_server::{
-    proto::op::{MessageType, OpCode, ResponseCode},
-    server::{Request, RequestHandler, ResponseHandler, ResponseInfo},
-};
 #[cfg(feature = "recursion")]
 use std::net::IpAddr;
 use std::sync::Arc;
 
 mod authoritative;
+#[cfg(feature = "recursion")]
+mod recursive;
 mod runtime;
 mod zones;
 
 #[cfg(feature = "recursion")]
 use crate::config::RecursionConfig;
+#[cfg(feature = "recursion")]
+use recursive::RecursiveResolver;
 pub use runtime::RuntimeState;
 use zones::AuthoritativeZones;
 
@@ -27,7 +24,7 @@ pub type DynResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 #[derive(Clone)]
 pub struct Forwarder {
     #[cfg(feature = "recursion")]
-    recursor: Arc<Recursor>,
+    recursive_resolver: RecursiveResolver,
     authoritative_zones: Arc<AuthoritativeZones>,
     #[cfg(feature = "recursion")]
     cache: Arc<dyn DnsRecordCache>,
@@ -111,29 +108,6 @@ fn prefix_mask(prefix: u8, bits: u8) -> u128 {
         0
     } else {
         u128::MAX << (u32::from(bits - prefix))
-    }
-}
-
-#[async_trait]
-impl RequestHandler for Forwarder {
-    async fn handle_request<R: ResponseHandler>(
-        &self,
-        request: &Request,
-        response_handle: R,
-    ) -> ResponseInfo {
-        match request.message_type() {
-            MessageType::Query => match request.op_code() {
-                OpCode::Query => self.forward_query(request, response_handle).await,
-                _ => {
-                    self.send_error_response(request, response_handle, ResponseCode::NotImp)
-                        .await
-                }
-            },
-            MessageType::Response => {
-                self.send_error_response(request, response_handle, ResponseCode::FormErr)
-                    .await
-            }
-        }
     }
 }
 
