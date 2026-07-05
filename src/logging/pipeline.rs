@@ -16,6 +16,11 @@ use std::{os::unix::fs::MetadataExt, os::unix::fs::OpenOptionsExt};
 use tokio::time;
 use tracing::error;
 
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const O_NOFOLLOW: i32 = 0x20000;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const O_NOFOLLOW: i32 = 0x100;
+
 #[derive(Clone)]
 pub struct LoggingPipeline {
     enabled: bool,
@@ -265,8 +270,13 @@ fn open_append_no_symlink(path: &Path) -> io::Result<fs::File> {
 
     let mut options = OpenOptions::new();
     options.create(true).append(true);
-    #[cfg(unix)]
-    options.custom_flags(libc::O_NOFOLLOW);
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    ))]
+    options.custom_flags(O_NOFOLLOW);
     options.open(path)
 }
 

@@ -14,13 +14,7 @@ RUN apk add --no-cache \
         pkgconf
 
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
-COPY main.rs mcp.rs ops.rs secure.rs ./
-COPY caching ./caching
-COPY config ./config
-COPY forwarder ./forwarder
-COPY livereload ./livereload
-COPY logging ./logging
-COPY policy ./policy
+COPY src ./src
 
 RUN if [ "$BUILD_PROFILE" = "release" ]; then \
         cargo build --locked --release --all-features; \

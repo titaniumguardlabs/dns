@@ -4,10 +4,6 @@ version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
 
-[[bin]]
-name = "titaniumguard-dns"
-path = "main.rs"
-
 [profile.release]
 codegen-units = 1
 lto = true
@@ -30,7 +26,7 @@ doq = ["dep:quinn", "dep:rustls"]
 doh3 = ["dep:base64", "dep:bytes", "dep:h3", "dep:h3-quinn", "dep:http", "dep:quinn", "dep:rustls"]
 recursion = []
 redis-cache = ["dep:redis"]
-audit-logging = ["dep:hex", "dep:hmac", "dep:libc", "dep:sha2"]
+audit-logging = ["dep:hex", "dep:hmac", "dep:sha2"]
 mcp = ["dep:axum", "dep:rmcp", "dep:tokio-util"]
 
 [dependencies]
@@ -45,7 +41,6 @@ hmac = { version = "0.13.0", default-features = false, optional = true }
 http = { version = "1.4.1", default-features = false, optional = true }
 h3 = { version = "0.0.8", default-features = false, optional = true }
 h3-quinn = { version = "0.0.10", default-features = false, optional = true }
-libc = { version = "0.2.186", optional = true }
 moka = { version = "0.12.15", default-features = false, features = ["future"] }
 prometheus = { version = "0.14.0", default-features = false }
 quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"], optional = true }

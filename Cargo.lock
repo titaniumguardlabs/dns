@@ -1639,7 +1639,6 @@ dependencies = [
  "hex",
  "hmac",
  "http",
- "libc",
  "moka",
  "prometheus",
  "quinn",
