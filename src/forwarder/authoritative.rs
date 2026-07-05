@@ -2,7 +2,6 @@ use super::zones::AuthoritativeZones;
 use super::{DynResult, Forwarder, RuntimeState};
 use crate::caching::DnsRecordCache;
 use crate::config::{RecursionConfig, ZoneConfig};
-#[cfg(feature = "recursion")]
 use crate::dns::DnsRecord as WireDnsRecord;
 use crate::dns::{DnsMessage, DnsRequest, ResponseCode as WireResponseCode};
 use crate::logging::{LoggingPipeline, RawLogEvent};
@@ -13,7 +12,6 @@ use std::{
     sync::Arc,
     time::{Instant, SystemTime},
 };
-#[cfg(feature = "recursion")]
 use tracing::error;
 
 impl Forwarder {
@@ -23,9 +21,7 @@ impl Forwarder {
     pub fn with_cache(
         root_servers: &[IpAddr],
         zone_configs: &[ZoneConfig],
-        #[cfg_attr(not(feature = "recursion"), allow(unused_variables))] cache: Arc<
-            dyn DnsRecordCache,
-        >,
+        cache: Arc<dyn DnsRecordCache>,
         logging: Arc<LoggingPipeline>,
         policy: Arc<PolicyRuntime>,
         runtime: RuntimeState,
@@ -42,39 +38,29 @@ impl Forwarder {
     }
 
     pub fn with_cache_and_recursion(
-        #[cfg_attr(not(feature = "recursion"), allow(unused_variables))] root_servers: &[IpAddr],
+        root_servers: &[IpAddr],
         zone_configs: &[ZoneConfig],
         cache: Arc<dyn DnsRecordCache>,
         logging: Arc<LoggingPipeline>,
         policy: Arc<PolicyRuntime>,
         runtime: RuntimeState,
-        #[cfg_attr(not(feature = "recursion"), allow(unused_variables))]
         recursion_config: &RecursionConfig,
     ) -> DynResult<Self> {
-        #[cfg(not(feature = "recursion"))]
-        let _ = &cache;
-
-        #[cfg(feature = "recursion")]
         let recursive_resolver = super::RecursiveResolver::new(root_servers)?;
         let authoritative_zones = AuthoritativeZones::from_configs(zone_configs)?;
-        #[cfg(feature = "recursion")]
         let recursion = super::RecursionAuthorizer::from_config(recursion_config)
             .map_err(|err| format!("invalid recursion config: {err}"))?;
         Ok(Self {
-            #[cfg(feature = "recursion")]
             recursive_resolver,
             authoritative_zones: Arc::new(authoritative_zones),
-            #[cfg(feature = "recursion")]
             cache,
             logging,
             policy,
             runtime,
-            #[cfg(feature = "recursion")]
             recursion,
         })
     }
 
-    #[cfg(feature = "recursion")]
     pub(super) fn cache_key(request: &DnsRequest) -> DynResult<String> {
         let question = request
             .message
@@ -89,7 +75,6 @@ impl Forwarder {
         ))
     }
 
-    #[cfg(feature = "recursion")]
     fn cached_response_for_request(request: &DnsRequest, records: &[WireDnsRecord]) -> DnsMessage {
         let mut response =
             DnsMessage::response_for_request(&request.message, WireResponseCode::NoError);
@@ -167,7 +152,6 @@ impl Forwarder {
             return response;
         }
 
-        #[cfg(feature = "recursion")]
         if self.recursion.allows(client_ip) {
             let cache_key = match Self::cache_key(&request) {
                 Ok(key) => key,

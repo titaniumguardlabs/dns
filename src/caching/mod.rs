@@ -1,5 +1,3 @@
-#![cfg_attr(not(feature = "recursion"), allow(dead_code))]
-
 pub mod base;
 pub mod moka;
 #[cfg(feature = "redis-cache")]

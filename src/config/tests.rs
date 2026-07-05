@@ -517,7 +517,6 @@ fn validate_rejects_mcp_when_feature_disabled() {
 }
 
 #[test]
-#[cfg(feature = "recursion")]
 fn validate_rejects_enabled_recursion_without_cidrs() {
     let mut config = AppConfig::default();
     config.recursion.enabled = true;
@@ -527,24 +526,12 @@ fn validate_rejects_enabled_recursion_without_cidrs() {
 }
 
 #[test]
-#[cfg(feature = "recursion")]
 fn validate_rejects_invalid_recursion_cidr() {
     let mut config = AppConfig::default();
     config.recursion.allowed_client_cidrs = vec!["127.0.0.1/99".to_string()];
 
     let err = config.validate(false).expect_err("validation should fail");
     assert!(err.to_string().contains("invalid recursion CIDR"));
-}
-
-#[test]
-#[cfg(not(feature = "recursion"))]
-fn validate_rejects_recursion_when_feature_disabled() {
-    let mut config = AppConfig::default();
-    config.recursion.enabled = true;
-    config.recursion.allowed_client_cidrs = vec!["127.0.0.0/8".to_string()];
-
-    let err = config.validate(false).expect_err("validation should fail");
-    assert!(err.to_string().contains("recursion"));
 }
 
 #[test]

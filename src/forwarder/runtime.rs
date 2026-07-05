@@ -101,12 +101,10 @@ impl RuntimeState {
         self.inner.recursion_denies.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[cfg(feature = "recursion")]
     pub fn inc_cache_hits(&self) {
         self.inner.cache_hits.fetch_add(1, Ordering::Relaxed);
     }
 
-    #[cfg(feature = "recursion")]
     pub fn inc_cache_misses(&self) {
         self.inner.cache_misses.fetch_add(1, Ordering::Relaxed);
     }
