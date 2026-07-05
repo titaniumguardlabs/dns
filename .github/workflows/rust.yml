@@ -60,7 +60,9 @@ jobs:
         run: cargo build
       - name: Build release
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
-        run: cargo build --release
+        run: |
+          cross build --target aarch64-unknown-linux-gnu --release
+          cross build --target x86_64-unknown-linux-gnu --release
       - name: Publish crate
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
