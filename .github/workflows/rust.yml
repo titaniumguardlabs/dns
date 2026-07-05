@@ -47,26 +47,39 @@ jobs:
         uses: github/codeql-action/analyze@v4
 
   cargo-build:
-    name: Cargo Build
+    name: Cargo Build (${{ matrix.arch }})
     runs-on: ubuntu-latest
     needs:
       - test
       - codeql
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@v7
       - name: Build debug
         if: github.event_name == 'pull_request'
-        run: |
-          cross build --target aarch64-unknown-linux-gnu
-          cross build --target x86_64-unknown-linux-gnu
+        run: cross build --target "${{ matrix.target }}"
       - name: Build release
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
-        run: |
-          cross build --target aarch64-unknown-linux-gnu --release
-          cross build --target x86_64-unknown-linux-gnu --release
+        run: cross build --target "${{ matrix.target }}" --release
+
+  cargo-publish:
+    name: Cargo Publish
+    runs-on: ubuntu-latest
+    needs:
+      - cargo-build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v7
       - name: Publish crate
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |

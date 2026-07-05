@@ -154,17 +154,21 @@ Workflow graph:
 
 1. `test` runs first and executes `cargo test`.
 2. `codeql` runs only after `test` succeeds.
-3. `cargo-build` and the matrixed `docker-build` jobs both depend on `codeql`,
-   so they run in parallel after CodeQL passes.
-4. `docker-manifest` runs after all Docker matrix builds and only on publish
+3. Matrixed `cargo-build` and `docker-build` jobs both depend on `codeql`, so
+   they run in parallel after CodeQL passes.
+4. `cargo-publish` runs after all Cargo matrix builds and only on tag pushes.
+5. `docker-manifest` runs after all Docker matrix builds and only on publish
    events.
 
 Cargo job behavior:
 
-- Pull requests run `cargo build`.
-- Pushes to `main` and tag pushes run `cargo build --release`.
-- Tag pushes then run `cargo login "$CARGO_REGISTRY_TOKEN"` and
-  `cargo publish --locked`.
+- Uses a custom target matrix on `ubuntu-latest`.
+- Builds `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu`.
+- The ARM target installs `gcc-aarch64-linux-gnu` and sets the Cargo linker.
+- Pull requests run `cargo build --target ...`.
+- Pushes to `main` and tag pushes run `cargo build --target ... --release`.
+- Tag pushes run a separate `cargo-publish` job with
+  `cargo login "$CARGO_REGISTRY_TOKEN"` and `cargo publish --locked`.
 - `CARGO_REGISTRY_TOKEN` must be configured as a repository secret.
 - Crates.io versions come from `Cargo.toml`; `cargo publish` cannot override
   the version from the CLI. Keep tag names and `Cargo.toml` versions aligned.
