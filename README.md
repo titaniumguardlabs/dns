@@ -58,7 +58,6 @@ binaries are opt-in with `--no-default-features`.
 
 | Feature | Included by default | Enables |
 | --- | --- | --- |
-| `recursion` | Yes | Recursive upstream forwarding through the in-repo DNS wire implementation. |
 | `redis-cache` | Yes | Redis-backed DNS response cache. |
 | `audit-logging` | Yes | Tenant-aware audit logs, HMAC hashing, retention, and readiness checks. |
 | `dot` | Yes | DNS over TLS. |
@@ -80,13 +79,14 @@ cargo build --release --no-default-features
 cargo build --release --no-default-features --features dot
 
 # Recursive resolver plus Redis cache, without encrypted transports
-cargo build --release --no-default-features --features recursion,redis-cache
+cargo build --release --no-default-features --features redis-cache
 ```
 
 If a config file uses a capability that was compiled out, startup fails with a
 clear validation error. For example, `caching.type = "redis"` requires
 `redis-cache`, `transports.doh` requires `doh`, `transports.doq` requires
-`doq`, and `transports.doh3` requires `doh3`.
+`doq`, and `transports.doh3` requires `doh3`. Recursive forwarding is always
+compiled in and remains controlled by runtime config and client CIDR allowlists.
 
 ## Quick Start
 

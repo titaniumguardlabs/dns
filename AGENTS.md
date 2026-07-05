@@ -44,7 +44,6 @@ Core behavior:
 
 Default features intentionally enable the full production surface:
 
-- `recursion`
 - `redis-cache`
 - `audit-logging`
 - `dot`
@@ -65,7 +64,7 @@ cargo build
 cargo build --release
 cargo build --release --no-default-features
 cargo build --release --no-default-features --features dot
-cargo build --release --no-default-features --features recursion,redis-cache
+cargo build --release --no-default-features --features redis-cache
 ```
 
 The release profile uses LTO, `panic = "abort"`, stripping, one codegen unit,

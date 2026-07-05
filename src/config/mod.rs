@@ -289,11 +289,6 @@ impl AppConfig {
                 return Err("caching.failure_threshold must be greater than zero".into());
             }
         }
-        #[cfg(not(feature = "recursion"))]
-        if self.recursion.enabled {
-            return Err("recursion.enabled=true requires the `recursion` feature".into());
-        }
-
         if self.recursion.enabled && self.recursion.allowed_client_cidrs.is_empty() {
             return Err(
                 "recursion.allowed_client_cidrs must be non-empty when recursion is enabled".into(),

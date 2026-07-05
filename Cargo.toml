@@ -17,7 +17,7 @@ strip = true
 opt-level = 3
 
 [features]
-default = ["recursion", "redis-cache", "audit-logging", "dot", "doh", "doq", "doh3", "mcp"]
+default = ["redis-cache", "audit-logging", "dot", "doh", "doq", "doh3", "mcp"]
 dot = ["dep:rustls", "dep:tokio-rustls"]
 doh = [
     "dep:base64",
@@ -29,7 +29,6 @@ doh = [
 ]
 doq = ["dep:quinn", "dep:rustls"]
 doh3 = ["dep:base64", "dep:bytes", "dep:h3", "dep:h3-quinn", "dep:http", "dep:quinn", "dep:rustls"]
-recursion = []
 redis-cache = ["dep:redis"]
 audit-logging = ["dep:hex", "dep:hmac", "dep:sha2"]
 mcp = ["dep:axum", "dep:rmcp", "dep:tokio-util"]
