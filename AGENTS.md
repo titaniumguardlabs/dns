@@ -154,8 +154,10 @@ Workflow graph:
 
 1. `test` runs first and executes `cargo test`.
 2. `codeql` runs only after `test` succeeds.
-3. `cargo-build` and `docker-build` both depend on `codeql`, so they run in
-   parallel after CodeQL passes.
+3. `cargo-build` and the matrixed `docker-build` jobs both depend on `codeql`,
+   so they run in parallel after CodeQL passes.
+4. `docker-manifest` runs after all Docker matrix builds and only on publish
+   events.
 
 Cargo job behavior:
 
@@ -169,12 +171,14 @@ Cargo job behavior:
 
 Docker job behavior:
 
-- Uses `docker/setup-buildx-action`.
+- Uses native Docker builds in a custom architecture matrix.
+- Builds `amd64` on `ubuntu-latest` and `arm64` on `ubuntu-24.04-arm`.
 - Logs in to GHCR only for pushes to `main` or tags.
-- Uses a single `docker/build-push-action` step.
 - Pull requests pass `BUILD_PROFILE=debug` and do not push.
-- Pushes to `main` pass `BUILD_PROFILE=release` and push `latest`.
-- Tag pushes pass `BUILD_PROFILE=release` and push the tag name.
+- Pushes to `main` pass `BUILD_PROFILE=release`, push `latest-amd64` and
+  `latest-arm64`, then publish a multi-platform `latest` manifest.
+- Tag pushes pass `BUILD_PROFILE=release`, push tag-suffixed architecture
+  images, then publish a multi-platform tag manifest.
 - Published image names use `ghcr.io/${{ github.repository }}`.
 
 ## Release Expectations
