@@ -47,22 +47,45 @@ jobs:
         uses: github/codeql-action/analyze@v4
 
   cargo-build:
-    name: Cargo Build
+    name: Cargo Build (${{ matrix.arch }})
     runs-on: ubuntu-latest
     needs:
       - test
       - codeql
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64-unknown-linux-gnu
+            target: x86_64-unknown-linux-gnu
+          - arch: aarch64-unknown-linux-gnu
+            target: aarch64-unknown-linux-gnu
+          - arch: s390x-unknown-linux-gnu
+            target: s390x-unknown-linux-gnu
+          - arch: powerpc64le-unknown-linux-gnu
+            target: powerpc64le-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@v7
+      - name: Install cross tool
+        run: cargo install cross --git https://github.com/cross-rs/cross
       - name: Build debug
         if: github.event_name == 'pull_request'
-        run: cargo build
+        run: cross build --target "${{ matrix.target }}"
       - name: Build release
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
-        run: cargo build --release
+        run: cross build --target "${{ matrix.target }}" --release
+
+  cargo-publish:
+    name: Cargo Publish
+    runs-on: ubuntu-latest
+    needs:
+      - cargo-build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - uses: actions/checkout@v7
       - name: Publish crate
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
@@ -70,16 +93,40 @@ jobs:
           cargo publish --locked
 
   docker-build:
-    name: Docker Build
-    runs-on: ubuntu-latest
+    name: Docker Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
     needs:
       - test
       - codeql
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v7
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v4
+      - name: Set image metadata
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            build_profile="debug"
+            image_ref="titaniumguard-dns:${{ matrix.arch }}-${GITHUB_SHA}"
+          else
+            build_profile="release"
+            if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+              image_tag="${GITHUB_REF_NAME}"
+            else
+              image_tag="latest"
+            fi
+            image_ref="${REGISTRY}/${IMAGE_NAME}:${image_tag}-${{ matrix.arch }}"
+          fi
+
+          echo "BUILD_PROFILE=${build_profile}" >> "$GITHUB_ENV"
+          echo "IMAGE_REF=${image_ref}" >> "$GITHUB_ENV"
       - name: Log in to GitHub Container Registry
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
         uses: docker/login-action@v4
@@ -88,11 +135,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build Docker image
-        uses: docker/build-push-action@v7
+        run: docker build --build-arg BUILD_PROFILE="${BUILD_PROFILE}" --tag "${IMAGE_REF}" .
+      - name: Push Docker image
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+        run: docker push "${IMAGE_REF}"
+
+  docker-manifest:
+    name: Docker Manifest
+    runs-on: ubuntu-latest
+    needs:
+      - docker-build
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/'))
+
+    steps:
+      - name: Set image metadata
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            image_tag="${GITHUB_REF_NAME}"
+          else
+            image_tag="latest"
+          fi
+
+          image="${REGISTRY}/${IMAGE_NAME}:${image_tag}"
+          echo "IMAGE=${image}" >> "$GITHUB_ENV"
+          echo "IMAGE_AMD64=${image}-amd64" >> "$GITHUB_ENV"
+          echo "IMAGE_ARM64=${image}-arm64" >> "$GITHUB_ENV"
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
         with:
-          context: .
-          build-args: BUILD_PROFILE=${{ github.event_name == 'pull_request' && 'debug' || 'release' }}
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest' }}
-          push: ${{ github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')) }}
-          provenance: mode=max
-          sbom: true
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push multi-platform Docker manifest
+        run: |
+          docker manifest create "${IMAGE}" "${IMAGE_AMD64}" "${IMAGE_ARM64}"
+          docker manifest annotate "${IMAGE}" "${IMAGE_AMD64}" --os linux --arch amd64
+          docker manifest annotate "${IMAGE}" "${IMAGE_ARM64}" --os linux --arch arm64
+          docker manifest push "${IMAGE}"
