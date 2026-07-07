@@ -3,9 +3,7 @@ use crate::caching::CachingConfig;
 use crate::dns::DnsName;
 use crate::logging::LoggingConfig;
 use crate::policy::RuleEngineConfig;
-#[cfg(any(feature = "doh", feature = "dnscrypt"))]
 use base64::Engine;
-#[cfg(any(feature = "doh", feature = "dnscrypt"))]
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use std::io::ErrorKind;
@@ -29,6 +27,7 @@ pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS: u64 = 10;
 pub const DNSCRYPT_KEY_BYTES: usize = 32;
 #[cfg(feature = "dnscrypt")]
 pub const DNSCRYPT_CLIENT_MAGIC_BYTES: usize = 8;
+pub const DNSSEC_ED25519_SECRET_KEY_BYTES: usize = 32;
 
 mod hpke;
 
@@ -69,6 +68,23 @@ pub struct ZoneConfig {
     pub soa: ZoneSoaConfig,
     #[serde(default)]
     pub records: BTreeMap<String, BTreeMap<String, ZoneRecordSetConfig>>,
+    #[serde(default)]
+    pub dnssec: Option<ZoneDnsSecConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ZoneDnsSecConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_dnssec_algorithm")]
+    pub algorithm: String,
+    pub ksk_secret_key_path: String,
+    pub zsk_secret_key_path: String,
+    pub valid_from: u32,
+    pub valid_until: u32,
+    #[serde(default)]
+    pub signature_ttl: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -321,6 +337,9 @@ impl AppConfig {
             validate_ip_cidr(cidr)
                 .map_err(|err| format!("invalid recursion CIDR {cidr}: {err}"))?;
         }
+        for zone in &self.zones {
+            validate_zone_dnssec(zone)?;
+        }
 
         #[cfg(not(feature = "dot"))]
         if self.transports.dot.is_some() {
@@ -515,6 +534,10 @@ fn default_shutdown_drain_timeout_seconds() -> u64 {
     DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS
 }
 
+fn default_dnssec_algorithm() -> String {
+    "ED25519".to_string()
+}
+
 fn default_https_endpoint() -> String {
     "/dns-query".to_string()
 }
@@ -546,6 +569,59 @@ fn validate_tls_paths(paths: Option<(&str, &str)>) -> DynResult<()> {
         );
     }
     Ok(())
+}
+
+fn validate_zone_dnssec(zone: &ZoneConfig) -> DynResult<()> {
+    let Some(dnssec) = zone.dnssec.as_ref() else {
+        return Ok(());
+    };
+    if !dnssec.enabled {
+        return Ok(());
+    }
+    if !dnssec.algorithm.eq_ignore_ascii_case("ED25519") {
+        return Err(format!("zones[].dnssec.algorithm for {} must be ED25519", zone.name).into());
+    }
+    if dnssec.valid_from > dnssec.valid_until {
+        return Err(format!(
+            "zones[].dnssec.valid_from for {} must be before or equal to valid_until",
+            zone.name
+        )
+        .into());
+    }
+    if matches!(dnssec.signature_ttl, Some(0)) {
+        return Err(format!(
+            "zones[].dnssec.signature_ttl for {} must be greater than zero",
+            zone.name
+        )
+        .into());
+    }
+    decode_dnssec_ed25519_key_file(
+        &dnssec.ksk_secret_key_path,
+        "zones[].dnssec.ksk_secret_key_path",
+    )?;
+    decode_dnssec_ed25519_key_file(
+        &dnssec.zsk_secret_key_path,
+        "zones[].dnssec.zsk_secret_key_path",
+    )?;
+    Ok(())
+}
+
+pub(crate) fn decode_dnssec_ed25519_key_file(
+    path: &str,
+    field: &str,
+) -> DynResult<[u8; DNSSEC_ED25519_SECRET_KEY_BYTES]> {
+    let contents = fs::read_to_string(path)
+        .map_err(|err| format!("{field} could not be read from {path}: {err}"))?;
+    let decoded = STANDARD
+        .decode(contents.trim())
+        .map_err(|err| format!("{field} must contain base64 key bytes: {err}"))?;
+    decoded.try_into().map_err(|bytes: Vec<u8>| {
+        format!(
+            "{field} must decode to {DNSSEC_ED25519_SECRET_KEY_BYTES} bytes, got {}",
+            bytes.len()
+        )
+        .into()
+    })
 }
 
 #[cfg(feature = "dnscrypt")]

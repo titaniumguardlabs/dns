@@ -8,6 +8,7 @@ use std::sync::Arc;
 mod authoritative;
 mod recursive;
 mod runtime;
+mod zone_records;
 mod zones;
 
 use recursive::RecursiveResolver;

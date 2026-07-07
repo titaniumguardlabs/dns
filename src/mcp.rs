@@ -38,7 +38,9 @@ pub(crate) struct ResolveRequest {
     )]
     hostname: String,
     #[serde(default = "default_record_type")]
-    #[schemars(description = "DNS record type: A, AAAA, TXT, SRV, NS, or SOA.")]
+    #[schemars(
+        description = "DNS record type: A, AAAA, TXT, SRV, NS, SOA, CNAME, MX, PTR, CAA, SVCB, HTTPS, DS, DNSKEY, RRSIG, or NSEC."
+    )]
     record_type: String,
     #[serde(default)]
     #[schemars(description = "Set EDNS DNSSEC OK on the synthetic DNS query.")]
@@ -310,6 +312,16 @@ fn parse_record_type(input: &str) -> Result<RecordType, ErrorData> {
         "SRV" => Ok(RecordType::SRV),
         "NS" => Ok(RecordType::NS),
         "SOA" => Ok(RecordType::SOA),
+        "CNAME" => Ok(RecordType::CNAME),
+        "MX" => Ok(RecordType::MX),
+        "PTR" => Ok(RecordType::PTR),
+        "CAA" => Ok(RecordType::CAA),
+        "SVCB" => Ok(RecordType::SVCB),
+        "HTTPS" => Ok(RecordType::HTTPS),
+        "DS" => Ok(RecordType::DS),
+        "DNSKEY" => Ok(RecordType::DNSKEY),
+        "RRSIG" => Ok(RecordType::RRSIG),
+        "NSEC" => Ok(RecordType::NSEC),
         other => Err(ErrorData::invalid_params(
             format!("unsupported record_type: {other}"),
             None,
@@ -410,9 +422,63 @@ fn summarize_rdata(data: &RData) -> String {
             port,
             target,
         } => format!("{priority} {weight} {port} {target}"),
+        RData::CAA { flags, tag, value } => {
+            format!("{flags} {tag} {}", String::from_utf8_lossy(value))
+        }
+        RData::SVCB {
+            priority,
+            target,
+            params,
+        }
+        | RData::HTTPS {
+            priority,
+            target,
+            params,
+        } => {
+            let params = params
+                .iter()
+                .map(|(key, value)| format!("key{key}={}", value.len()))
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!("{priority} {target} {params}")
+        }
+        RData::DS {
+            key_tag,
+            algorithm,
+            digest_type,
+            digest,
+        } => format!("{key_tag} {algorithm} {digest_type} {}", hex_string(digest)),
+        RData::DNSKEY {
+            flags,
+            protocol,
+            algorithm,
+            public_key,
+        } => format!("{flags} {protocol} {algorithm} {}", public_key.len()),
+        RData::RRSIG {
+            type_covered,
+            algorithm,
+            labels,
+            original_ttl,
+            expiration,
+            inception,
+            key_tag,
+            signer_name,
+            signature,
+        } => format!(
+            "{type_covered} {algorithm} {labels} {original_ttl} {expiration} {inception} {key_tag} {signer_name} {}",
+            signature.len()
+        ),
+        RData::NSEC {
+            next_domain,
+            type_bit_maps,
+        } => format!("{next_domain} {}", type_bit_maps.len()),
         RData::OPT(bytes) => format!("{} bytes", bytes.len()),
         RData::Unknown { bytes, .. } => format!("{} bytes", bytes.len()),
     }
+}
+
+fn hex_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn cache_type(config: &AppConfig) -> String {
@@ -527,6 +593,7 @@ mod tests {
                 ttl: 3600,
             },
             records,
+            dnssec: None,
         }
     }
 
@@ -544,7 +611,7 @@ mod tests {
 
     #[test]
     fn parse_record_type_rejects_unsupported_types() {
-        let err = parse_record_type("MX").expect_err("MX should fail");
+        let err = parse_record_type("TLSA").expect_err("TLSA should fail");
         assert!(err.message.contains("unsupported"));
     }
 

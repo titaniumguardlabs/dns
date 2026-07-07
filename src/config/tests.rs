@@ -35,7 +35,6 @@ fn sample_config() -> AppConfig {
     }
 }
 
-#[cfg(any(feature = "dot", feature = "doh", feature = "dnscrypt"))]
 fn temp_file_with_contents(prefix: &str, contents: &[u8]) -> PathBuf {
     let path = unique_missing_path(prefix);
     fs::write(&path, contents).expect("temp file write should succeed");
@@ -203,6 +202,48 @@ fn app_config_parses_authoritative_zone_from_json() {
 
     assert_eq!(config.zones.len(), 1);
     assert_eq!(config.zones[0].soa.minimum, 300);
+}
+
+#[test]
+fn app_config_parses_zone_dnssec_config() {
+    let path = write_temp_config(
+        "dns-zone-dnssec-parse",
+        r#"
+{
+  "listen_addr": "0.0.0.0:8080",
+  "zones": [
+    {
+      "name": "corp.internal.",
+      "soa": {
+        "mname": "ns1.corp.internal.",
+        "rname": "dns-admin.corp.internal.",
+        "serial": 2026022001,
+        "refresh": 3600,
+        "retry": 600,
+        "expire": 1209600,
+        "minimum": 300
+      },
+      "dnssec": {
+        "enabled": true,
+        "algorithm": "ED25519",
+        "ksk_secret_key_path": "/tmp/ksk.key",
+        "zsk_secret_key_path": "/tmp/zsk.key",
+        "valid_from": 1800000000,
+        "valid_until": 1800086400,
+        "signature_ttl": 600
+      }
+    }
+  ]
+}
+"#,
+    );
+    let config = AppConfig::from_file(&path).expect("config should parse");
+    let _ = fs::remove_file(&path);
+
+    let dnssec = config.zones[0].dnssec.as_ref().expect("dnssec config");
+    assert!(dnssec.enabled);
+    assert_eq!(dnssec.algorithm, "ED25519");
+    assert_eq!(dnssec.signature_ttl, Some(600));
 }
 
 #[test]
@@ -532,6 +573,156 @@ fn validate_rejects_invalid_recursion_cidr() {
 
     let err = config.validate(false).expect_err("validation should fail");
     assert!(err.to_string().contains("invalid recursion CIDR"));
+}
+
+#[test]
+fn validate_accepts_enabled_zone_dnssec_with_base64_keys() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let ksk = temp_file_with_contents("dnssec-ksk", key);
+    let zsk = temp_file_with_contents("dnssec-zsk", key);
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "ED25519".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800000000,
+            valid_until: 1800086400,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let result = config.validate(false);
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(result.is_ok(), "unexpected error: {result:?}");
+}
+
+#[test]
+fn validate_rejects_zone_dnssec_invalid_algorithm() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let ksk = temp_file_with_contents("dnssec-ksk", key);
+    let zsk = temp_file_with_contents("dnssec-zsk", key);
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "RSASHA256".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800000000,
+            valid_until: 1800086400,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(err.to_string().contains("ED25519"));
+}
+
+#[test]
+fn validate_rejects_zone_dnssec_invalid_key_length() {
+    let ksk = temp_file_with_contents("dnssec-short-ksk", b"AAAA");
+    let zsk = temp_file_with_contents(
+        "dnssec-zsk",
+        b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    );
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "ED25519".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800000000,
+            valid_until: 1800086400,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(err.to_string().contains("32 bytes"));
+}
+
+#[test]
+fn validate_rejects_zone_dnssec_invalid_validity_window() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let ksk = temp_file_with_contents("dnssec-ksk", key);
+    let zsk = temp_file_with_contents("dnssec-zsk", key);
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "ED25519".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800086400,
+            valid_until: 1800000000,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(err.to_string().contains("valid_from"));
 }
 
 #[test]

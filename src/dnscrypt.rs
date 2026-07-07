@@ -597,6 +597,7 @@ mod tests {
                 ttl: 3600,
             },
             records,
+            dnssec: None,
         }];
         Forwarder::with_cache(
             &[IpAddr::from([198, 41, 0, 4])],

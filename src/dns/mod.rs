@@ -6,7 +6,7 @@ mod question;
 mod record;
 mod request;
 mod types;
-mod wire;
+pub(crate) mod wire;
 
 pub use error::{DnsError, DnsResult};
 pub use header::DnsHeader;
@@ -103,6 +103,108 @@ mod tests {
         message.header.authoritative = true;
         message.answers.push(answer);
         message.authorities.push(authority);
+
+        let reparsed =
+            DnsMessage::from_wire(&message.to_wire().expect("message should emit")).expect("parse");
+
+        assert_eq!(reparsed, message);
+    }
+
+    #[test]
+    fn parses_and_emits_extended_authoritative_records() {
+        let name = DnsName::parse_ascii("example.com.").expect("valid name");
+        let records = vec![
+            DnsRecord {
+                name: name.clone(),
+                ttl: 300,
+                class: DnsClass::IN,
+                data: RData::CAA {
+                    flags: 0,
+                    tag: "issue".to_string(),
+                    value: b"ca.example".to_vec(),
+                },
+            },
+            DnsRecord {
+                name: name.clone(),
+                ttl: 300,
+                class: DnsClass::IN,
+                data: RData::SVCB {
+                    priority: 1,
+                    target: DnsName::parse_ascii("svc.example.com.").expect("target"),
+                    params: vec![
+                        (1, vec![2, b'h', b'2']),
+                        (3, 8443u16.to_be_bytes().to_vec()),
+                    ],
+                },
+            },
+            DnsRecord {
+                name: name.clone(),
+                ttl: 300,
+                class: DnsClass::IN,
+                data: RData::HTTPS {
+                    priority: 1,
+                    target: DnsName::root(),
+                    params: vec![(2, Vec::new())],
+                },
+            },
+            DnsRecord {
+                name: name.clone(),
+                ttl: 300,
+                class: DnsClass::IN,
+                data: RData::DS {
+                    key_tag: 12345,
+                    algorithm: 15,
+                    digest_type: 2,
+                    digest: vec![0xaa, 0xbb],
+                },
+            },
+            DnsRecord {
+                name: name.clone(),
+                ttl: 300,
+                class: DnsClass::IN,
+                data: RData::DNSKEY {
+                    flags: 256,
+                    protocol: 3,
+                    algorithm: 15,
+                    public_key: vec![1; 32],
+                },
+            },
+            DnsRecord {
+                name: name.clone(),
+                ttl: 300,
+                class: DnsClass::IN,
+                data: RData::RRSIG {
+                    type_covered: RecordType::A,
+                    algorithm: 15,
+                    labels: 2,
+                    original_ttl: 300,
+                    expiration: 1_800_086_400,
+                    inception: 1_800_000_000,
+                    key_tag: 12345,
+                    signer_name: name.clone(),
+                    signature: vec![2; 64],
+                },
+            },
+            DnsRecord {
+                name: name.clone(),
+                ttl: 300,
+                class: DnsClass::IN,
+                data: RData::NSEC {
+                    next_domain: DnsName::parse_ascii("www.example.com.").expect("next"),
+                    type_bit_maps: vec![0, 1, 0x40],
+                },
+            },
+        ];
+        let mut message = DnsMessage::query(
+            11,
+            DnsQuestion {
+                name,
+                record_type: RecordType::ANY,
+                class: DnsClass::IN,
+            },
+        );
+        message.header.response = true;
+        message.answers = records;
 
         let reparsed =
             DnsMessage::from_wire(&message.to_wire().expect("message should emit")).expect("parse");
