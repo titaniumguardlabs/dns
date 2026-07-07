@@ -169,4 +169,17 @@ mod tests {
             Some("doh")
         );
     }
+
+    #[test]
+    fn extracts_dnscrypt_protocol_fact() {
+        let mut request = request_from_wire("secure.example.", WireRecordType::A);
+        request.protocol = TransportProtocol::DnsCrypt;
+
+        let facts = from_repo_dns_request(&request);
+
+        assert_eq!(
+            facts.get("conn.protocol").and_then(|v| v.as_str()),
+            Some("dnscrypt")
+        );
+    }
 }

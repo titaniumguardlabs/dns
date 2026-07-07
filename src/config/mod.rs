@@ -1,9 +1,11 @@
 use crate::caching::CachingConfig;
+#[cfg(feature = "dnscrypt")]
+use crate::dns::DnsName;
 use crate::logging::LoggingConfig;
 use crate::policy::RuleEngineConfig;
-#[cfg(feature = "doh")]
+#[cfg(any(feature = "doh", feature = "dnscrypt"))]
 use base64::Engine;
-#[cfg(feature = "doh")]
+#[cfg(any(feature = "doh", feature = "dnscrypt"))]
 use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use std::io::ErrorKind;
@@ -23,6 +25,10 @@ pub const DEFAULT_MAX_DOH_H2_CONNECTIONS: u32 = 1024;
 pub const DEFAULT_MAX_DOH_H2_STREAMS_PER_CONNECTION: u32 = 100;
 pub const DEFAULT_MAX_DOH_BODY_BYTES: usize = 4096;
 pub const DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_SECONDS: u64 = 10;
+#[cfg(feature = "dnscrypt")]
+pub const DNSCRYPT_KEY_BYTES: usize = 32;
+#[cfg(feature = "dnscrypt")]
+pub const DNSCRYPT_CLIENT_MAGIC_BYTES: usize = 8;
 
 mod hpke;
 
@@ -188,6 +194,21 @@ pub struct QuicTransportConfig {
     pub dns_hostname: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[cfg_attr(not(feature = "dnscrypt"), allow(dead_code))]
+#[serde(deny_unknown_fields)]
+pub struct DnsCryptTransportConfig {
+    pub listen_addr: SocketAddr,
+    pub provider_name: String,
+    pub provider_secret_key_path: String,
+    pub resolver_secret_key_path: String,
+    pub cert_serial: u32,
+    pub cert_valid_from: u32,
+    pub cert_valid_until: u32,
+    #[serde(default)]
+    pub client_magic: Option<String>,
+}
+
 #[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransportConfig {
@@ -199,6 +220,8 @@ pub struct TransportConfig {
     pub doq: Option<QuicTransportConfig>,
     #[serde(default)]
     pub doh3: Option<QuicTransportConfig>,
+    #[serde(default)]
+    pub dnscrypt: Option<DnsCryptTransportConfig>,
 }
 
 impl AppConfig {
@@ -315,6 +338,10 @@ impl AppConfig {
         if self.transports.doh3.is_some() {
             return Err("transports.doh3 requires the `doh3` feature".into());
         }
+        #[cfg(not(feature = "dnscrypt"))]
+        if self.transports.dnscrypt.is_some() {
+            return Err("transports.dnscrypt requires the `dnscrypt` feature".into());
+        }
 
         validate_tls_paths(
             self.transports
@@ -362,6 +389,10 @@ impl AppConfig {
                     format!("invalid transports.doh.odoh.public_key_base64: {err}")
                 })?;
             }
+        }
+        #[cfg(feature = "dnscrypt")]
+        if let Some(dnscrypt) = self.transports.dnscrypt.as_ref() {
+            validate_dnscrypt_config(dnscrypt)?;
         }
 
         #[cfg(not(feature = "audit-logging"))]
@@ -515,6 +546,68 @@ fn validate_tls_paths(paths: Option<(&str, &str)>) -> DynResult<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(feature = "dnscrypt")]
+fn validate_dnscrypt_config(config: &DnsCryptTransportConfig) -> DynResult<()> {
+    if config.listen_addr.port() == 0 {
+        return Err("transports.dnscrypt.listen_addr port must be greater than zero".into());
+    }
+    if config.cert_valid_from > config.cert_valid_until {
+        return Err(
+            "transports.dnscrypt.cert_valid_from must be before or equal to cert_valid_until"
+                .into(),
+        );
+    }
+    let provider_name = DnsName::parse_ascii(&config.provider_name)
+        .map_err(|err| format!("invalid transports.dnscrypt.provider_name: {err}"))?;
+    if provider_name.to_ascii() == "." {
+        return Err("transports.dnscrypt.provider_name must not be root".into());
+    }
+    decode_dnscrypt_key_file(
+        &config.provider_secret_key_path,
+        "transports.dnscrypt.provider_secret_key_path",
+    )?;
+    decode_dnscrypt_key_file(
+        &config.resolver_secret_key_path,
+        "transports.dnscrypt.resolver_secret_key_path",
+    )?;
+    if let Some(client_magic) = config.client_magic.as_deref() {
+        let decoded = STANDARD
+            .decode(client_magic.trim())
+            .map_err(|err| format!("invalid transports.dnscrypt.client_magic base64: {err}"))?;
+        if decoded.len() != DNSCRYPT_CLIENT_MAGIC_BYTES {
+            return Err(format!(
+                "transports.dnscrypt.client_magic must decode to {DNSCRYPT_CLIENT_MAGIC_BYTES} bytes"
+            )
+            .into());
+        }
+        if decoded[..7] == [0; 7] {
+            return Err(
+                "transports.dnscrypt.client_magic must not start with seven zero bytes".into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "dnscrypt")]
+pub(crate) fn decode_dnscrypt_key_file(
+    path: &str,
+    field: &str,
+) -> DynResult<[u8; DNSCRYPT_KEY_BYTES]> {
+    let contents = fs::read_to_string(path)
+        .map_err(|err| format!("{field} could not be read from {path}: {err}"))?;
+    let decoded = STANDARD
+        .decode(contents.trim())
+        .map_err(|err| format!("{field} must contain base64 key bytes: {err}"))?;
+    decoded.try_into().map_err(|bytes: Vec<u8>| {
+        format!(
+            "{field} must decode to {DNSCRYPT_KEY_BYTES} bytes, got {}",
+            bytes.len()
+        )
+        .into()
+    })
 }
 
 fn is_safe_tenant_path_segment(tenant_id: &str) -> bool {

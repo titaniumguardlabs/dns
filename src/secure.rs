@@ -8,6 +8,8 @@ use crate::config::{HttpsTransportConfig, OdohConfig};
 use crate::dns::TransportProtocol as DnsTransportProtocol;
 #[cfg(any(feature = "doh", feature = "doh3", feature = "doq"))]
 use crate::dns::{DnsMessage, DnsRequest as WireDnsRequest, TransportProtocol};
+#[cfg(feature = "dnscrypt")]
+use crate::dnscrypt::register_dnscrypt_transport;
 use crate::forwarder::Forwarder;
 #[cfg(feature = "dot")]
 use crate::server;
@@ -117,6 +119,11 @@ pub(crate) async fn register_secure_transports(
         let endpoint = build_quic_endpoint(doh3, b"h3")?;
         info!("listening on doh3 {}", endpoint.local_addr()?);
         register_doh3_listener(doh3, endpoint, forwarder.clone());
+    }
+
+    #[cfg(feature = "dnscrypt")]
+    if let Some(dnscrypt) = &config.transports.dnscrypt {
+        register_dnscrypt_transport(dnscrypt, forwarder.clone()).await?;
     }
 
     Ok(())

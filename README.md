@@ -9,7 +9,7 @@ The project is open source under the Apache License, Version 2.0.
 ## What It Does
 
 - Serves plain DNS over UDP and TCP.
-- Can enable encrypted transports for DoT, DoH, DoQ, and DoH3.
+- Can enable encrypted transports for DoT, DoH, DoQ, DoH3, and DNSCrypt.
 - Hosts simple authoritative zones for internal DNS.
 - Recurses only when explicitly enabled for trusted client CIDRs.
 - Applies policy decisions across authoritative answers, cache hits, and recursive resolution.
@@ -30,7 +30,7 @@ The project is open source under the Apache License, Version 2.0.
 | DNS over QUIC (DoQ) | Supported | `transports.doq` | Uses a dedicated QUIC listener with ALPN `doq`. |
 | DNS over HTTP/3 (DoH3) | Supported | `transports.doh3` | Uses a dedicated HTTP/3 listener with ALPN `h3`. |
 | Oblivious DoH (ODoH) | WIP | `transports.doh.odoh` | Publishes `/.well-known/odohconfigs`; encrypted ODoH query handling is not complete yet. |
-| DNSCrypt | WIP | None | Not implemented. |
+| DNSCrypt | Supported | `transports.dnscrypt` | DNSCrypt v2 over dedicated UDP and TCP listeners. |
 
 ## Authoritative Record Support
 
@@ -64,6 +64,7 @@ binaries are opt-in with `--no-default-features`.
 | `doh` | Yes | DNS over HTTPS over HTTP/2 and ODoH config publishing. |
 | `doq` | Yes | DNS over QUIC. |
 | `doh3` | Yes | DNS over HTTP/3. |
+| `dnscrypt` | Yes | DNSCrypt v2 over UDP and TCP. |
 | `mcp` | Yes | Localhost Model Context Protocol endpoint for DNS tools. |
 
 Example builds:
@@ -85,8 +86,9 @@ cargo build --release --no-default-features --features redis-cache
 If a config file uses a capability that was compiled out, startup fails with a
 clear validation error. For example, `caching.type = "redis"` requires
 `redis-cache`, `transports.doh` requires `doh`, `transports.doq` requires
-`doq`, and `transports.doh3` requires `doh3`. Recursive forwarding is always
-compiled in and remains controlled by runtime config and client CIDR allowlists.
+`doq`, `transports.doh3` requires `doh3`, and `transports.dnscrypt` requires
+`dnscrypt`. Recursive forwarding is always compiled in and remains controlled
+by runtime config and client CIDR allowlists.
 
 ## Quick Start
 
@@ -130,6 +132,17 @@ for development, demos, and tests.
     "enabled": true,
     "allowed_client_cidrs": ["10.0.0.0/8", "fd00::/8"]
   },
+  "transports": {
+    "dnscrypt": {
+      "listen_addr": "0.0.0.0:443",
+      "provider_name": "dnscrypt.example.",
+      "provider_secret_key_path": "/etc/titaniumguard/dnscrypt-provider.key",
+      "resolver_secret_key_path": "/etc/titaniumguard/dnscrypt-resolver.key",
+      "cert_serial": 1,
+      "cert_valid_from": 1800000000,
+      "cert_valid_until": 1800086400
+    }
+  },
   "zones": [
     {
       "name": "corp.internal.",
@@ -170,6 +183,28 @@ Each RRset has:
 | --- | --- |
 | `ttl` | Record TTL in seconds. |
 | `values` | List of record values in the format expected by the record type. |
+
+## DNSCrypt
+
+DNSCrypt is configured under `transports.dnscrypt` and uses its own UDP and TCP
+listener. It is not multiplexed with DoH, DoT, DoQ, or DoH3.
+
+DNSCrypt config:
+
+| Field | Meaning |
+| --- | --- |
+| `listen_addr` | Dedicated UDP/TCP DNSCrypt listener. |
+| `provider_name` | DNSCrypt provider name used for certificate TXT queries such as `2.dnscrypt-cert.<provider_name>`. |
+| `provider_secret_key_path` | Base64 text file containing the raw 32-byte Ed25519 provider signing secret. |
+| `resolver_secret_key_path` | Base64 text file containing the raw 32-byte X25519 resolver secret. |
+| `cert_serial` | DNSCrypt certificate serial. Clients prefer newer valid serials. |
+| `cert_valid_from` | Certificate validity start as a Unix timestamp. |
+| `cert_valid_until` | Certificate validity end as a Unix timestamp. |
+| `client_magic` | Optional base64-encoded 8-byte client magic. If omitted, TitaniumGuard derives one from the resolver public key and serial. |
+
+DNSCrypt requests use the same authoritative, cache, recursion, policy, and
+audit path as other DNS transports. Policy rules can match
+`conn.protocol == "dnscrypt"`.
 
 ## Resolution Behavior
 
@@ -309,5 +344,5 @@ external names recursively.
 TitaniumGuard DNS is usable today for plain DNS, DoT, DoH, DoQ, DoH3, simple
 authoritative zones, guarded recursion, caching, policy enforcement, and
 production health checks. The biggest WIP areas are broader authoritative
-record coverage, full ODoH query handling, DNSCrypt, and authoritative DNSSEC
-signing.
+record coverage, full ODoH query handling, Anonymized DNSCrypt relay mode, and
+authoritative DNSSEC signing.

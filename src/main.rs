@@ -1,6 +1,8 @@
 mod caching;
 mod config;
 mod dns;
+#[cfg(feature = "dnscrypt")]
+mod dnscrypt;
 mod forwarder;
 #[path = "livereload/lib.rs"]
 mod livereload;
