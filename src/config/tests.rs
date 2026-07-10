@@ -35,7 +35,6 @@ fn sample_config() -> AppConfig {
     }
 }
 
-#[cfg(any(feature = "dot", feature = "doh"))]
 fn temp_file_with_contents(prefix: &str, contents: &[u8]) -> PathBuf {
     let path = unique_missing_path(prefix);
     fs::write(&path, contents).expect("temp file write should succeed");
@@ -203,6 +202,48 @@ fn app_config_parses_authoritative_zone_from_json() {
 
     assert_eq!(config.zones.len(), 1);
     assert_eq!(config.zones[0].soa.minimum, 300);
+}
+
+#[test]
+fn app_config_parses_zone_dnssec_config() {
+    let path = write_temp_config(
+        "dns-zone-dnssec-parse",
+        r#"
+{
+  "listen_addr": "0.0.0.0:8080",
+  "zones": [
+    {
+      "name": "corp.internal.",
+      "soa": {
+        "mname": "ns1.corp.internal.",
+        "rname": "dns-admin.corp.internal.",
+        "serial": 2026022001,
+        "refresh": 3600,
+        "retry": 600,
+        "expire": 1209600,
+        "minimum": 300
+      },
+      "dnssec": {
+        "enabled": true,
+        "algorithm": "ED25519",
+        "ksk_secret_key_path": "/tmp/ksk.key",
+        "zsk_secret_key_path": "/tmp/zsk.key",
+        "valid_from": 1800000000,
+        "valid_until": 1800086400,
+        "signature_ttl": 600
+      }
+    }
+  ]
+}
+"#,
+    );
+    let config = AppConfig::from_file(&path).expect("config should parse");
+    let _ = fs::remove_file(&path);
+
+    let dnssec = config.zones[0].dnssec.as_ref().expect("dnssec config");
+    assert!(dnssec.enabled);
+    assert_eq!(dnssec.algorithm, "ED25519");
+    assert_eq!(dnssec.signature_ttl, Some(600));
 }
 
 #[test]
@@ -535,6 +576,156 @@ fn validate_rejects_invalid_recursion_cidr() {
 }
 
 #[test]
+fn validate_accepts_enabled_zone_dnssec_with_base64_keys() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let ksk = temp_file_with_contents("dnssec-ksk", key);
+    let zsk = temp_file_with_contents("dnssec-zsk", key);
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "ED25519".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800000000,
+            valid_until: 1800086400,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let result = config.validate(false);
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(result.is_ok(), "unexpected error: {result:?}");
+}
+
+#[test]
+fn validate_rejects_zone_dnssec_invalid_algorithm() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let ksk = temp_file_with_contents("dnssec-ksk", key);
+    let zsk = temp_file_with_contents("dnssec-zsk", key);
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "RSASHA256".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800000000,
+            valid_until: 1800086400,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(err.to_string().contains("ED25519"));
+}
+
+#[test]
+fn validate_rejects_zone_dnssec_invalid_key_length() {
+    let ksk = temp_file_with_contents("dnssec-short-ksk", b"AAAA");
+    let zsk = temp_file_with_contents(
+        "dnssec-zsk",
+        b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    );
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "ED25519".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800000000,
+            valid_until: 1800086400,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(err.to_string().contains("32 bytes"));
+}
+
+#[test]
+fn validate_rejects_zone_dnssec_invalid_validity_window() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let ksk = temp_file_with_contents("dnssec-ksk", key);
+    let zsk = temp_file_with_contents("dnssec-zsk", key);
+    let mut config = AppConfig::default();
+    config.zones.push(ZoneConfig {
+        name: "corp.internal.".to_string(),
+        soa: ZoneSoaConfig {
+            mname: "ns1.corp.internal.".to_string(),
+            rname: "dns-admin.corp.internal.".to_string(),
+            serial: 1,
+            refresh: 3600,
+            retry: 600,
+            expire: 1209600,
+            minimum: 300,
+            ttl: 3600,
+        },
+        records: Default::default(),
+        dnssec: Some(ZoneDnsSecConfig {
+            enabled: true,
+            algorithm: "ED25519".to_string(),
+            ksk_secret_key_path: ksk.display().to_string(),
+            zsk_secret_key_path: zsk.display().to_string(),
+            valid_from: 1800086400,
+            valid_until: 1800000000,
+            signature_ttl: Some(600),
+        }),
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&ksk);
+    let _ = fs::remove_file(&zsk);
+
+    assert!(err.to_string().contains("valid_from"));
+}
+
+#[test]
 #[cfg(feature = "dot")]
 fn validate_rejects_missing_tls_files() {
     let mut config = AppConfig::default();
@@ -626,6 +817,188 @@ fn validate_rejects_doh3_when_feature_disabled() {
 
     let err = config.validate(false).expect_err("validation should fail");
     assert!(err.to_string().contains("doh3"));
+}
+
+#[test]
+#[cfg(feature = "dnscrypt")]
+fn app_config_parses_dnscrypt_transport() {
+    let path = write_temp_config(
+        "dns-dnscrypt-parse",
+        r#"
+{
+  "listen_addr": "0.0.0.0:8080",
+  "transports": {
+    "dnscrypt": {
+      "listen_addr": "0.0.0.0:443",
+      "provider_name": "dnscrypt.example.",
+      "provider_secret_key_path": "/tmp/provider.key",
+      "resolver_secret_key_path": "/tmp/resolver.key",
+      "cert_serial": 7,
+      "cert_valid_from": 1800000000,
+      "cert_valid_until": 1800086400,
+      "client_magic": "MTIzNDU2Nzg="
+    }
+  }
+}
+"#,
+    );
+    let config = AppConfig::from_file(&path).expect("config should parse");
+    let _ = fs::remove_file(&path);
+
+    let dnscrypt = config
+        .transports
+        .dnscrypt
+        .as_ref()
+        .expect("dnscrypt config");
+    assert_eq!(dnscrypt.listen_addr.port(), 443);
+    assert_eq!(dnscrypt.provider_name, "dnscrypt.example.");
+    assert_eq!(dnscrypt.cert_serial, 7);
+}
+
+#[test]
+#[cfg(feature = "dnscrypt")]
+fn validate_accepts_dnscrypt_with_base64_key_files() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let provider = temp_file_with_contents("dnscrypt-provider-key", key);
+    let resolver = temp_file_with_contents("dnscrypt-resolver-key", key);
+    let mut config = AppConfig::default();
+    config.transports.dnscrypt = Some(DnsCryptTransportConfig {
+        listen_addr: "0.0.0.0:443".parse().expect("addr"),
+        provider_name: "dnscrypt.example.".to_string(),
+        provider_secret_key_path: provider.display().to_string(),
+        resolver_secret_key_path: resolver.display().to_string(),
+        cert_serial: 1,
+        cert_valid_from: 1800000000,
+        cert_valid_until: 1800086400,
+        client_magic: Some("MTIzNDU2Nzg=".to_string()),
+    });
+
+    let result = config.validate(false);
+    let _ = fs::remove_file(&provider);
+    let _ = fs::remove_file(&resolver);
+
+    assert!(result.is_ok(), "unexpected error: {result:?}");
+}
+
+#[test]
+#[cfg(feature = "dnscrypt")]
+fn validate_rejects_dnscrypt_invalid_key_length() {
+    let provider = temp_file_with_contents("dnscrypt-provider-short-key", b"AAAA");
+    let resolver = temp_file_with_contents(
+        "dnscrypt-resolver-key",
+        b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+    );
+    let mut config = AppConfig::default();
+    config.transports.dnscrypt = Some(DnsCryptTransportConfig {
+        listen_addr: "0.0.0.0:443".parse().expect("addr"),
+        provider_name: "dnscrypt.example.".to_string(),
+        provider_secret_key_path: provider.display().to_string(),
+        resolver_secret_key_path: resolver.display().to_string(),
+        cert_serial: 1,
+        cert_valid_from: 1800000000,
+        cert_valid_until: 1800086400,
+        client_magic: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&provider);
+    let _ = fs::remove_file(&resolver);
+
+    assert!(err.to_string().contains("32 bytes"));
+}
+
+#[test]
+#[cfg(feature = "dnscrypt")]
+fn validate_rejects_dnscrypt_invalid_provider_name() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let provider = temp_file_with_contents("dnscrypt-provider-key", key);
+    let resolver = temp_file_with_contents("dnscrypt-resolver-key", key);
+    let mut config = AppConfig::default();
+    config.transports.dnscrypt = Some(DnsCryptTransportConfig {
+        listen_addr: "0.0.0.0:443".parse().expect("addr"),
+        provider_name: "..".to_string(),
+        provider_secret_key_path: provider.display().to_string(),
+        resolver_secret_key_path: resolver.display().to_string(),
+        cert_serial: 1,
+        cert_valid_from: 1800000000,
+        cert_valid_until: 1800086400,
+        client_magic: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&provider);
+    let _ = fs::remove_file(&resolver);
+
+    assert!(err.to_string().contains("provider_name"));
+}
+
+#[test]
+#[cfg(feature = "dnscrypt")]
+fn validate_rejects_dnscrypt_invalid_cert_window() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let provider = temp_file_with_contents("dnscrypt-provider-key", key);
+    let resolver = temp_file_with_contents("dnscrypt-resolver-key", key);
+    let mut config = AppConfig::default();
+    config.transports.dnscrypt = Some(DnsCryptTransportConfig {
+        listen_addr: "0.0.0.0:443".parse().expect("addr"),
+        provider_name: "dnscrypt.example.".to_string(),
+        provider_secret_key_path: provider.display().to_string(),
+        resolver_secret_key_path: resolver.display().to_string(),
+        cert_serial: 1,
+        cert_valid_from: 1800086400,
+        cert_valid_until: 1800000000,
+        client_magic: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&provider);
+    let _ = fs::remove_file(&resolver);
+
+    assert!(err.to_string().contains("cert_valid_from"));
+}
+
+#[test]
+#[cfg(feature = "dnscrypt")]
+fn validate_rejects_dnscrypt_zero_port() {
+    let key = b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+    let provider = temp_file_with_contents("dnscrypt-provider-key", key);
+    let resolver = temp_file_with_contents("dnscrypt-resolver-key", key);
+    let mut config = AppConfig::default();
+    config.transports.dnscrypt = Some(DnsCryptTransportConfig {
+        listen_addr: "0.0.0.0:0".parse().expect("addr"),
+        provider_name: "dnscrypt.example.".to_string(),
+        provider_secret_key_path: provider.display().to_string(),
+        resolver_secret_key_path: resolver.display().to_string(),
+        cert_serial: 1,
+        cert_valid_from: 1800000000,
+        cert_valid_until: 1800086400,
+        client_magic: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    let _ = fs::remove_file(&provider);
+    let _ = fs::remove_file(&resolver);
+
+    assert!(err.to_string().contains("listen_addr port"));
+}
+
+#[test]
+#[cfg(not(feature = "dnscrypt"))]
+fn validate_rejects_dnscrypt_when_feature_disabled() {
+    let mut config = AppConfig::default();
+    config.transports.dnscrypt = Some(DnsCryptTransportConfig {
+        listen_addr: "0.0.0.0:443".parse().expect("addr"),
+        provider_name: "dnscrypt.example.".to_string(),
+        provider_secret_key_path: "/tmp/provider.key".to_string(),
+        resolver_secret_key_path: "/tmp/resolver.key".to_string(),
+        cert_serial: 1,
+        cert_valid_from: 1800000000,
+        cert_valid_until: 1800086400,
+        client_magic: None,
+    });
+
+    let err = config.validate(false).expect_err("validation should fail");
+    assert!(err.to_string().contains("dnscrypt"));
 }
 
 #[test]

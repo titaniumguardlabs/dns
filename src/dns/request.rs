@@ -9,6 +9,8 @@ pub enum TransportProtocol {
     Https,
     Quic,
     Https3,
+    #[cfg_attr(not(feature = "dnscrypt"), allow(dead_code))]
+    DnsCrypt,
 }
 
 impl TransportProtocol {
@@ -19,6 +21,7 @@ impl TransportProtocol {
             Self::Https => "doh",
             Self::Quic => "doq",
             Self::Https3 => "doh3",
+            Self::DnsCrypt => "dnscrypt",
         }
     }
 }

@@ -9,7 +9,7 @@ The project is open source under the Apache License, Version 2.0.
 ## What It Does
 
 - Serves plain DNS over UDP and TCP.
-- Can enable encrypted transports for DoT, DoH, DoQ, and DoH3.
+- Can enable encrypted transports for DoT, DoH, DoQ, DoH3, and DNSCrypt.
 - Hosts simple authoritative zones for internal DNS.
 - Recurses only when explicitly enabled for trusted client CIDRs.
 - Applies policy decisions across authoritative answers, cache hits, and recursive resolution.
@@ -30,7 +30,7 @@ The project is open source under the Apache License, Version 2.0.
 | DNS over QUIC (DoQ) | Supported | `transports.doq` | Uses a dedicated QUIC listener with ALPN `doq`. |
 | DNS over HTTP/3 (DoH3) | Supported | `transports.doh3` | Uses a dedicated HTTP/3 listener with ALPN `h3`. |
 | Oblivious DoH (ODoH) | WIP | `transports.doh.odoh` | Publishes `/.well-known/odohconfigs`; encrypted ODoH query handling is not complete yet. |
-| DNSCrypt | WIP | None | Not implemented. |
+| DNSCrypt | Supported | `transports.dnscrypt` | DNSCrypt v2 over dedicated UDP and TCP listeners. |
 
 ## Authoritative Record Support
 
@@ -43,12 +43,12 @@ The project is open source under the Apache License, Version 2.0.
 | `TXT` | Supported | `records.<owner>.TXT.values` | Each value becomes one TXT record. |
 | `SRV` | Supported | `records.<owner>.SRV.values` | Value format is `<priority> <weight> <port> <target>`. |
 | `ANY` query | Supported | Query only | Returns all configured RRsets for the queried owner name. |
-| `CNAME` | WIP | None | Not implemented in the authoritative parser yet. |
-| `MX` | WIP | None | Not implemented in the authoritative parser yet. |
-| `PTR` | WIP | None | Not implemented in the authoritative parser yet. |
-| `CAA` | WIP | None | Not implemented in the authoritative parser yet. |
-| `SVCB` / `HTTPS` | WIP | None | Not implemented in the authoritative parser yet. |
-| DNSSEC zone records | WIP | None | Authoritative signing and DNSSEC record management are not implemented. |
+| `CNAME` | Supported | `records.<owner>.CNAME.values` | Value is a canonical target name. |
+| `MX` | Supported | `records.<owner>.MX.values` | Value format is `<preference> <exchange>`. |
+| `PTR` | Supported | `records.<owner>.PTR.values` | Value is a target name. |
+| `CAA` | Supported | `records.<owner>.CAA.values` | Value format is `<flags> <tag> <value>`. |
+| `SVCB` / `HTTPS` | Supported | `records.<owner>.SVCB.values`, `records.<owner>.HTTPS.values` | Value format is `<priority> <target> [key=value ...]`. |
+| DNSSEC zone signing | Supported | `zones[].dnssec` | Generates DNSKEY, RRSIG, and NSEC with Ed25519 keys. |
 
 ## Cargo Features
 
@@ -64,6 +64,7 @@ binaries are opt-in with `--no-default-features`.
 | `doh` | Yes | DNS over HTTPS over HTTP/2 and ODoH config publishing. |
 | `doq` | Yes | DNS over QUIC. |
 | `doh3` | Yes | DNS over HTTP/3. |
+| `dnscrypt` | Yes | DNSCrypt v2 over UDP and TCP. |
 | `mcp` | Yes | Localhost Model Context Protocol endpoint for DNS tools. |
 
 Example builds:
@@ -85,8 +86,9 @@ cargo build --release --no-default-features --features redis-cache
 If a config file uses a capability that was compiled out, startup fails with a
 clear validation error. For example, `caching.type = "redis"` requires
 `redis-cache`, `transports.doh` requires `doh`, `transports.doq` requires
-`doq`, and `transports.doh3` requires `doh3`. Recursive forwarding is always
-compiled in and remains controlled by runtime config and client CIDR allowlists.
+`doq`, `transports.doh3` requires `doh3`, and `transports.dnscrypt` requires
+`dnscrypt`. Recursive forwarding is always compiled in and remains controlled
+by runtime config and client CIDR allowlists.
 
 ## Quick Start
 
@@ -130,6 +132,17 @@ for development, demos, and tests.
     "enabled": true,
     "allowed_client_cidrs": ["10.0.0.0/8", "fd00::/8"]
   },
+  "transports": {
+    "dnscrypt": {
+      "listen_addr": "0.0.0.0:443",
+      "provider_name": "dnscrypt.example.",
+      "provider_secret_key_path": "/etc/titaniumguard/dnscrypt-provider.key",
+      "resolver_secret_key_path": "/etc/titaniumguard/dnscrypt-resolver.key",
+      "cert_serial": 1,
+      "cert_valid_from": 1800000000,
+      "cert_valid_until": 1800086400
+    }
+  },
   "zones": [
     {
       "name": "corp.internal.",
@@ -143,15 +156,32 @@ for development, demos, and tests.
         "MINIMUM": 300,
         "ttl": 3600
       },
+      "dnssec": {
+        "enabled": true,
+        "algorithm": "ED25519",
+        "ksk_secret_key_path": "/etc/titaniumguard/dnssec-ksk.key",
+        "zsk_secret_key_path": "/etc/titaniumguard/dnssec-zsk.key",
+        "valid_from": 1800000000,
+        "valid_until": 1800086400,
+        "signature_ttl": 600
+      },
       "records": {
         "@": {
           "NS": { "ttl": 3600, "values": ["ns1.corp.internal."] },
           "A": { "ttl": 300, "values": ["10.10.0.53"] },
           "AAAA": { "ttl": 300, "values": ["fd00::53"] },
-          "TXT": { "ttl": 300, "values": ["corp authoritative dns"] }
+          "TXT": { "ttl": 300, "values": ["corp authoritative dns"] },
+          "CAA": { "ttl": 300, "values": ["0 issue ca.example"] },
+          "HTTPS": { "ttl": 300, "values": ["1 . alpn=h3 port=443"] }
         },
         "api": {
           "A": { "ttl": 300, "values": ["10.10.1.10"] }
+        },
+        "www": {
+          "CNAME": { "ttl": 300, "values": ["api.corp.internal."] }
+        },
+        "mail": {
+          "MX": { "ttl": 300, "values": ["10 mail.corp.internal."] }
         },
         "_sip._tcp": {
           "SRV": { "ttl": 300, "values": ["10 5 5060 sip.corp.internal."] }
@@ -170,6 +200,59 @@ Each RRset has:
 | --- | --- |
 | `ttl` | Record TTL in seconds. |
 | `values` | List of record values in the format expected by the record type. |
+
+Supported value formats:
+
+| Type | Value format |
+| --- | --- |
+| `A` | IPv4 address. |
+| `AAAA` | IPv6 address. |
+| `NS`, `CNAME`, `PTR` | DNS name. |
+| `TXT` | Text bytes. |
+| `SRV` | `<priority> <weight> <port> <target>`. |
+| `MX` | `<preference> <exchange>`. |
+| `CAA` | `<flags> <tag> <value>`. |
+| `SVCB`, `HTTPS` | `<priority> <target> [key=value ...]`; supported keys are `mandatory`, `alpn`, `no-default-alpn`, `port`, `ipv4hint`, `ech`, and `ipv6hint`. |
+| `DS` | `<key_tag> <algorithm> <digest_type> <hex_digest>`. |
+
+DNSSEC signing config:
+
+| Field | Meaning |
+| --- | --- |
+| `zones[].dnssec.enabled` | Enables generated DNSSEC records for the zone. |
+| `zones[].dnssec.algorithm` | Signing algorithm. The first supported value is `ED25519`. |
+| `zones[].dnssec.ksk_secret_key_path` | Base64 text file containing a raw 32-byte Ed25519 KSK secret. |
+| `zones[].dnssec.zsk_secret_key_path` | Base64 text file containing a raw 32-byte Ed25519 ZSK secret. |
+| `zones[].dnssec.valid_from` | RRSIG inception Unix timestamp. |
+| `zones[].dnssec.valid_until` | RRSIG expiration Unix timestamp. |
+| `zones[].dnssec.signature_ttl` | Optional TTL for generated RRSIG records. Defaults to the zone SOA TTL. |
+
+When DNSSEC is enabled, TitaniumGuard generates DNSKEY, RRSIG, and NSEC records
+at startup. NSEC is used for authenticated denial of existence. NSEC3, rollover
+automation, CDS/CDNSKEY publication, and parent-zone DS automation are not part
+of this release.
+
+## DNSCrypt
+
+DNSCrypt is configured under `transports.dnscrypt` and uses its own UDP and TCP
+listener. It is not multiplexed with DoH, DoT, DoQ, or DoH3.
+
+DNSCrypt config:
+
+| Field | Meaning |
+| --- | --- |
+| `listen_addr` | Dedicated UDP/TCP DNSCrypt listener. |
+| `provider_name` | DNSCrypt provider name used for certificate TXT queries such as `2.dnscrypt-cert.<provider_name>`. |
+| `provider_secret_key_path` | Base64 text file containing the raw 32-byte Ed25519 provider signing secret. |
+| `resolver_secret_key_path` | Base64 text file containing the raw 32-byte X25519 resolver secret. |
+| `cert_serial` | DNSCrypt certificate serial. Clients prefer newer valid serials. |
+| `cert_valid_from` | Certificate validity start as a Unix timestamp. |
+| `cert_valid_until` | Certificate validity end as a Unix timestamp. |
+| `client_magic` | Optional base64-encoded 8-byte client magic. If omitted, TitaniumGuard derives one from the resolver public key and serial. |
+
+DNSCrypt requests use the same authoritative, cache, recursion, policy, and
+audit path as other DNS transports. Policy rules can match
+`conn.protocol == "dnscrypt"`.
 
 ## Resolution Behavior
 
@@ -245,8 +328,9 @@ Tools:
 | `zones` | Configured authoritative zones, owners, and record types. |
 | `resolve` | Resolves `hostname` and optional `record_type` through the live DNS policy, authoritative, cache, and recursion path. |
 
-`resolve` supports `A`, `AAAA`, `TXT`, `SRV`, `NS`, and `SOA`. Recursive MCP
-resolution obeys the normal recursion allowlist using `mcp.resolve_client_ip`;
+`resolve` supports `A`, `AAAA`, `TXT`, `SRV`, `NS`, `SOA`, `CNAME`, `MX`,
+`PTR`, `CAA`, `SVCB`, `HTTPS`, `DS`, `DNSKEY`, `RRSIG`, and `NSEC`. Recursive
+MCP resolution obeys the normal recursion allowlist using `mcp.resolve_client_ip`;
 include that IP in `recursion.allowed_client_cidrs` when MCP should resolve
 external names recursively.
 
@@ -306,8 +390,8 @@ external names recursively.
 
 ## Project Status
 
-TitaniumGuard DNS is usable today for plain DNS, DoT, DoH, DoQ, DoH3, simple
-authoritative zones, guarded recursion, caching, policy enforcement, and
-production health checks. The biggest WIP areas are broader authoritative
-record coverage, full ODoH query handling, DNSCrypt, and authoritative DNSSEC
-signing.
+TitaniumGuard DNS is usable today for plain DNS, DoT, DoH, DoQ, DoH3,
+DNSCrypt, authoritative zones with DNSSEC signing, guarded recursion, caching,
+policy enforcement, and production health checks. The biggest WIP areas are
+full ODoH query handling, Anonymized DNSCrypt relay mode, NSEC3, and DNSSEC key
+rollover automation.

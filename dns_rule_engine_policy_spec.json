@@ -50,7 +50,7 @@
     "conn.protocol": {
       "type": "string",
       "source_stage": "CONNECTION",
-      "description": "Inbound protocol marker"
+      "description": "Inbound protocol marker, for example dns, dot, doh, doq, doh3, or dnscrypt"
     },
     "time.local.hour": {
       "type": "int",

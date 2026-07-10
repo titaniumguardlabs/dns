@@ -87,6 +87,7 @@ fn single_a_zone() -> ZoneConfig {
             ttl: 3600,
         },
         records,
+        dnssec: None,
     }
 }
 
@@ -149,6 +150,7 @@ fn authoritative_zone_matching_prefers_longest_owned_suffix() {
                 ttl: 3600,
             },
             records: BTreeMap::new(),
+            dnssec: None,
         },
         ZoneConfig {
             name: "corp.internal.".to_string(),
@@ -163,6 +165,7 @@ fn authoritative_zone_matching_prefers_longest_owned_suffix() {
                 ttl: 3600,
             },
             records: BTreeMap::new(),
+            dnssec: None,
         },
     ];
     let forwarder = Forwarder::with_cache(
