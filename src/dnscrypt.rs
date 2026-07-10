@@ -297,13 +297,13 @@ impl DnsCryptRuntime {
         if packet[..DNSCRYPT_CLIENT_MAGIC_BYTES] != self.client_magic {
             return Err("dnscrypt client magic mismatch".to_string());
         }
-        let mut client_public_key = [0u8; DNSCRYPT_KEY_BYTES];
+        let mut client_public_key = <[u8; DNSCRYPT_KEY_BYTES]>::default();
         client_public_key.copy_from_slice(
             &packet[DNSCRYPT_CLIENT_MAGIC_BYTES..DNSCRYPT_CLIENT_MAGIC_BYTES + DNSCRYPT_KEY_BYTES],
         );
         let client_public_key = PublicKey::from(client_public_key);
         let nonce_offset = DNSCRYPT_CLIENT_MAGIC_BYTES + DNSCRYPT_KEY_BYTES;
-        let mut client_nonce_half = [0u8; QUERY_NONCE_HALF_BYTES];
+        let mut client_nonce_half = <[u8; QUERY_NONCE_HALF_BYTES]>::default();
         client_nonce_half
             .copy_from_slice(&packet[nonce_offset..nonce_offset + QUERY_NONCE_HALF_BYTES]);
         let encrypted = &packet[nonce_offset + QUERY_NONCE_HALF_BYTES..];
@@ -393,8 +393,8 @@ fn build_certificate_payload(
 
 fn derive_dnscrypt_aead_key(shared_secret: &[u8; DNSCRYPT_KEY_BYTES]) -> [u8; DNSCRYPT_KEY_BYTES] {
     let key = (*shared_secret).into();
-    let nonce = [0u8; 16].into();
-    hchacha::<R20>(&key, &nonce).into()
+    let hchacha_input = <[u8; 16]>::default().into();
+    hchacha::<R20>(&key, &hchacha_input).into()
 }
 
 fn encrypt_dnscrypt_payload(
@@ -447,23 +447,25 @@ fn move_tag_to_front(mut encrypted: Vec<u8>) -> Vec<u8> {
 }
 
 fn build_query_nonce(client_nonce_half: &[u8; QUERY_NONCE_HALF_BYTES]) -> [u8; 24] {
-    let mut nonce = [0u8; 24];
-    nonce[..QUERY_NONCE_HALF_BYTES].copy_from_slice(client_nonce_half);
-    nonce
+    build_response_nonce(client_nonce_half, &query_resolver_nonce_half())
 }
 
 fn build_response_nonce(
     client_nonce_half: &[u8; QUERY_NONCE_HALF_BYTES],
     resolver_nonce_half: &[u8; QUERY_NONCE_HALF_BYTES],
 ) -> [u8; 24] {
-    let mut nonce = [0u8; 24];
+    let mut nonce = <[u8; 24]>::default();
     nonce[..QUERY_NONCE_HALF_BYTES].copy_from_slice(client_nonce_half);
     nonce[QUERY_NONCE_HALF_BYTES..].copy_from_slice(resolver_nonce_half);
     nonce
 }
 
+fn query_resolver_nonce_half() -> [u8; QUERY_NONCE_HALF_BYTES] {
+    <[u8; QUERY_NONCE_HALF_BYTES]>::default()
+}
+
 fn random_nonce_half() -> Result<[u8; QUERY_NONCE_HALF_BYTES], String> {
-    let mut nonce = [0u8; QUERY_NONCE_HALF_BYTES];
+    let mut nonce = <[u8; QUERY_NONCE_HALF_BYTES]>::default();
     getrandom::fill(&mut nonce)
         .map_err(|err| format!("failed to generate dnscrypt nonce: {err}"))?;
     Ok(nonce)
@@ -641,7 +643,7 @@ mod tests {
         wire: &[u8],
     ) -> Vec<u8> {
         let client_public = PublicKey::from(client_secret);
-        let client_nonce_half = [5u8; QUERY_NONCE_HALF_BYTES];
+        let client_nonce_half = random_nonce_half().expect("client nonce");
         let cipher = client_cipher(runtime, client_secret);
         let nonce = build_query_nonce(&client_nonce_half);
         let mut padded = wire.to_vec();
@@ -664,11 +666,11 @@ mod tests {
             &response[..DNSCRYPT_RESPONSE_MAGIC.len()],
             DNSCRYPT_RESPONSE_MAGIC
         );
-        let mut client_nonce_half = [0u8; QUERY_NONCE_HALF_BYTES];
+        let mut client_nonce_half = <[u8; QUERY_NONCE_HALF_BYTES]>::default();
         client_nonce_half.copy_from_slice(
             &response[DNSCRYPT_RESPONSE_MAGIC.len()..DNSCRYPT_RESPONSE_MAGIC.len() + 12],
         );
-        let mut resolver_nonce_half = [0u8; QUERY_NONCE_HALF_BYTES];
+        let mut resolver_nonce_half = <[u8; QUERY_NONCE_HALF_BYTES]>::default();
         resolver_nonce_half.copy_from_slice(
             &response[DNSCRYPT_RESPONSE_MAGIC.len() + 12..DNSCRYPT_RESPONSE_MAGIC.len() + 24],
         );
@@ -735,7 +737,9 @@ mod tests {
         let key = [42u8; DNSCRYPT_KEY_BYTES];
         let key = Key::from(key);
         let cipher = XChaCha20Poly1305::new(&key);
-        let nonce = [11u8; 24];
+        let client_nonce_half = random_nonce_half().expect("client nonce");
+        let resolver_nonce_half = random_nonce_half().expect("resolver nonce");
+        let nonce = build_response_nonce(&client_nonce_half, &resolver_nonce_half);
         let plaintext = b"payload";
 
         let encrypted = encrypt_dnscrypt_payload(&cipher, &nonce, plaintext).expect("encrypt");
